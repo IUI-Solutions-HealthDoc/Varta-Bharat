@@ -1,10 +1,14 @@
 import logging
 
 import psycopg
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 
 from app.config import settings
 from app.logging_setup import setup_logging
+
+from uuid import UUID
+
+from app.auth.dependencies import AuthUser, current_user
 
 setup_logging()
 log = logging.getLogger("varta")
@@ -26,3 +30,12 @@ def ready() -> dict:
         log.error("readiness check failed", extra={"ctx": {"error": type(exc).__name__}})
         raise HTTPException(status_code=503, detail="database unavailable") from exc
     return {"status": "ready"}
+
+
+@app.get("/auth/me")
+def get_current_user(user: AuthUser = Depends(current_user)):
+    return {
+        "user_id": str(user.id),
+        "tenant_id": str(user.tenant_id),
+        "device_id": str(user.device_id),
+    }
