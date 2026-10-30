@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 import valkey
 from psycopg.pq import TransactionStatus
 

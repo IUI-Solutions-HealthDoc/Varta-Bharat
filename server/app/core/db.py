@@ -1,4 +1,4 @@
-﻿"""Pooled Postgres connections.
+"""Pooled Postgres connections.
 
 get_conn() yields an autocommit connection, so `conn.transaction()` opens a real
 transaction (not a savepoint). Callers must never hold an outer transaction open.

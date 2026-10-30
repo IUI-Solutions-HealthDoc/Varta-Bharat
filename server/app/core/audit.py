@@ -1,4 +1,4 @@
-﻿"""Audit trail writer (audit_log is append-only for the app role).
+"""Audit trail writer (audit_log is append-only for the app role).
 
 audit() runs on the connection it is given, so the entry commits or rolls back together
 with the action it records. Never put message bodies, tokens, OTPs or tickets in `target`.
