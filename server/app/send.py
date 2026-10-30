@@ -12,7 +12,7 @@ from datetime import datetime
 import json
 import logging
 import unicodedata
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 from psycopg.pq import TransactionStatus
@@ -260,3 +260,108 @@ def send_message(
     enqueue_push(conversation_id, msg_seq)
 
     return Sent(seq=msg_seq, id=msg_id, created_at=created_at, duplicate=False)
+
+
+def send_tombstone(
+    conn: psycopg.Connection,
+    *,
+    conversation_id: UUID,
+    actor_id: UUID,
+    target_seq: int,
+    client_msg_id: UUID | None = None,
+) -> Sent:
+    """Tombstone message deletion transaction (BE-1: P2 Polish & Robustness).
+
+    Enforces:
+    - Target message exists in the conversation.
+    - Actor must be the original sender OR a conversation admin.
+    - Conversation row is locked via last_seq = last_seq + 1.
+    - Messages row is never deleted (Invariant I6). An append-only tombstone row
+      is inserted with kind='delete', target_seq=target_seq, body=None.
+    - Post-commit Valkey realtime hint & push notification hooks are triggered.
+    """
+    if conn.info.transaction_status != TransactionStatus.IDLE:
+        raise RuntimeError("send_tombstone must not be called inside an open transaction")
+
+    if target_seq <= 0:
+        raise ValueError("target_seq must be a positive integer.")
+
+    if client_msg_id is None:
+        client_msg_id = uuid4()
+
+    try:
+        with conn.transaction():
+            # Step 1: Check if target message exists in this conversation
+            target = conn.execute(
+                "SELECT sender_id FROM messages WHERE conversation_id = %s AND seq = %s",
+                (conversation_id, target_seq),
+            ).fetchone()
+            if target is None:
+                raise NotAllowed("target message not found")
+            orig_sender_id = target[0]
+
+            # Step 2: Lock conversation row by advancing last_seq
+            row = conn.execute(
+                "UPDATE conversations SET last_seq = last_seq + 1 "
+                "WHERE id = %s RETURNING last_seq, tenant_id",
+                (conversation_id,),
+            ).fetchone()
+            if row is None:
+                raise NotAllowed("conversation not found")
+            seq, tenant_id = row
+
+            # Step 3: Check idempotency for client_msg_id
+            dup = conn.execute(
+                "SELECT seq, id, created_at FROM messages "
+                "WHERE conversation_id = %s AND sender_id = %s AND client_msg_id = %s",
+                (conversation_id, actor_id, client_msg_id),
+            ).fetchone()
+            if dup is not None:
+                raise _Duplicate(dup)
+
+            # Step 4: Verify permissions (actor must be active member & either orig sender or conv admin)
+            member = conn.execute(
+                "SELECT cm.role FROM conversation_members cm "
+                "JOIN tenant_members tm ON tm.user_id = cm.user_id AND tm.tenant_id = %s "
+                "JOIN users u ON u.id = cm.user_id "
+                "WHERE cm.conversation_id = %s AND cm.user_id = %s "
+                "AND cm.left_at IS NULL AND tm.removed_at IS NULL AND u.status = 'active'",
+                (tenant_id, conversation_id, actor_id),
+            ).fetchone()
+            if member is None:
+                raise NotAllowed("not an active member")
+
+            role = member[0]
+            if actor_id != orig_sender_id and role != "admin":
+                raise NotAllowed(
+                    "only the original sender or a conversation admin can delete messages"
+                )
+
+            # Step 5: Insert append-only tombstone row
+            inserted = conn.execute(
+                "INSERT INTO messages "
+                "(conversation_id, seq, sender_id, client_msg_id, kind, target_seq, body, attachment_id) "
+                "VALUES (%s, %s, %s, %s, 'delete', %s, NULL, NULL) RETURNING seq, id, created_at",
+                (conversation_id, seq, actor_id, client_msg_id, target_seq),
+            ).fetchone()
+    except _Duplicate as dup_exc:
+        s, mid, created = dup_exc.row
+        return Sent(seq=s, id=mid, created_at=created, duplicate=True)
+
+    msg_seq, msg_id, created_at = inserted[0], inserted[1], inserted[2]
+
+    # Step 6: Post-commit hooks
+    publish_hint(
+        conversation_id=conversation_id,
+        seq=msg_seq,
+        message_id=msg_id,
+        sender_id=actor_id,
+        kind="delete",
+        created_at=created_at,
+        body=None,
+        attachment_id=None,
+    )
+    enqueue_push(conversation_id, msg_seq)
+
+    return Sent(seq=msg_seq, id=msg_id, created_at=created_at, duplicate=False)
+

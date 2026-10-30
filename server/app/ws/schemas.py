@@ -51,8 +51,23 @@ class AckFrame(BaseModel):
 class TypingFrame(BaseModel):
     """Client/Server frame indicating typing activity (P2)."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "type": "typing",
+                "conversation_id": "c1a2b3c4-d5e6-7f80-91a2-b3c4d5e6f7a8",
+                "user_id": "0192df78-0000-7000-8000-000000000001",
+                "is_typing": True,
+            }
+        }
+    )
+
     type: Annotated[Literal["typing"], Field(default="typing")]
     conversation_id: Annotated[UUID, Field(description="Conversation where typing is occurring.")]
+    user_id: Annotated[
+        UUID | None,
+        Field(default=None, description="User who is typing (populated by server in broadcast)."),
+    ]
     is_typing: Annotated[bool, Field(description="True if typing, False when typing stops.")]
 
 

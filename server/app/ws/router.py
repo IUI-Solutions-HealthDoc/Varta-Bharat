@@ -18,7 +18,7 @@ import json
 import logging
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 import psycopg
 
 from app.config import settings
@@ -28,6 +28,8 @@ from app.ws.schemas import (
     MsgFrame,
     MsgHintFrame,
     ReceiptFrame,
+    RevokedFrame,
+    TypingFrame,
     WelcomeFrame,
 )
 
@@ -42,9 +44,11 @@ class WsUser:
     device_id: UUID
 
 
-# In-memory registry of active WebSocket connections per conversation
+# In-memory registry of active WebSocket connections per conversation and device
 _conversation_subscribers: dict[UUID, set[WebSocket]] = defaultdict(set)
+_device_sockets: dict[UUID, set[WebSocket]] = defaultdict(set)
 _lock = asyncio.Lock()
+
 
 
 def redeem_ws_ticket(ticket: str) -> WsUser | None:
@@ -70,12 +74,13 @@ def redeem_ws_ticket(ticket: str) -> WsUser | None:
     except Exception as exc:  # noqa: BLE001
         log.debug("Valkey ticket lookup skipped: %s", exc)
 
-    # 2. Test / Dev ticket format: test:<user_id>:<tenant_id> or standard wstk_ tokens
+    # 2. Test / Dev ticket format: test:<user_id>:<tenant_id> or test:<user_id>:<tenant_id>:<device_id>
     if ticket.startswith("test:"):
         parts = ticket.split(":")
         user_id = UUID(parts[1]) if len(parts) > 1 else uuid4()
         tenant_id = UUID(parts[2]) if len(parts) > 2 else uuid4()
-        return WsUser(id=user_id, tenant_id=tenant_id, device_id=uuid4())
+        device_id = UUID(parts[3]) if len(parts) > 3 else uuid4()
+        return WsUser(id=user_id, tenant_id=tenant_id, device_id=device_id)
 
     if ticket.startswith("wstk_") or len(ticket) >= 16:
         # Valid format stub for integration testing
@@ -88,16 +93,69 @@ def redeem_ws_ticket(ticket: str) -> WsUser | None:
     return None
 
 
-async def broadcast_to_conversation(conversation_id: UUID, message_json: str) -> None:
-    """Broadcast an outgoing frame to all active WebSocket connections in a conversation."""
+async def broadcast_to_conversation(
+    conversation_id: UUID, message_json: str, exclude_ws: WebSocket | None = None
+) -> None:
+    """Broadcast an outgoing frame to active WebSocket connections in a conversation."""
     async with _lock:
-        sockets = list(_conversation_subscribers.get(conversation_id, set()))
+        sockets = [
+            ws
+            for ws in _conversation_subscribers.get(conversation_id, set())
+            if ws != exclude_ws
+        ]
 
     for ws in sockets:
         try:
             await ws.send_text(message_json)
         except Exception as exc:  # noqa: BLE001
             log.debug("Failed sending to socket: %s", exc)
+
+
+async def revoke_device_session(
+    device_id: UUID, reason: str = "Device session revoked by security policy"
+) -> bool:
+    """Send 'revoked' frame to all active sockets of the given device and terminate with code 1008 (P2)."""
+    async with _lock:
+        sockets = list(_device_sockets.get(device_id, set()))
+
+    if not sockets:
+        return False
+
+    frame = RevokedFrame(reason=reason)
+    frame_json = frame.model_dump_json()
+    for ws in sockets:
+        try:
+            await ws.send_text(frame_json)
+            await ws.close(code=1008)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Failed closing revoked device socket: %s", exc)
+    return True
+
+
+def revoke_device_session_sync(
+    device_id: UUID, reason: str = "Device session revoked by security policy"
+) -> bool:
+    """Synchronous helper for Member 2 auth or tests to invoke device revocation."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(revoke_device_session(device_id, reason))
+        return True
+    except RuntimeError:
+        return asyncio.run(revoke_device_session(device_id, reason))
+
+
+@router.post(
+    "/devices/{device_id}/revoke",
+    status_code=status.HTTP_200_OK,
+    summary="Revoke device session (Member 2 hook / P2)",
+    description="Pushes a 'revoked' frame to the active device WebSocket connection and terminates it.",
+)
+async def revoke_device_endpoint(
+    device_id: UUID, reason: str = "Device session revoked by security policy"
+) -> dict:
+    revoked = await revoke_device_session(device_id, reason)
+    return {"revoked": revoked, "device_id": str(device_id)}
+
 
 
 def broadcast_realtime_message(
@@ -197,6 +255,7 @@ async def websocket_gateway(websocket: WebSocket) -> None:
         log.warning("Could not load initial conversation subscriptions: %s", exc)
 
     async with _lock:
+        _device_sockets[user.device_id].add(websocket)
         for cid in subscribed_convs:
             _conversation_subscribers[cid].add(websocket)
 
@@ -264,6 +323,29 @@ async def websocket_gateway(websocket: WebSocket) -> None:
                 except Exception as exc:  # noqa: BLE001
                     log.warning("Failed updating ack cursors: %s", exc)
 
+            elif frame_type == "typing":
+                try:
+                    typing_in = TypingFrame.model_validate(frame_data)
+                except Exception as exc:  # noqa: BLE001
+                    err = ErrorFrame(code="MALFORMED_TYPING", message=str(exc))
+                    await websocket.send_text(err.model_dump_json())
+                    continue
+
+                # Ensure socket is subscribed
+                async with _lock:
+                    _conversation_subscribers[typing_in.conversation_id].add(websocket)
+
+                typing_out = TypingFrame(
+                    conversation_id=typing_in.conversation_id,
+                    user_id=user.id,
+                    is_typing=typing_in.is_typing,
+                )
+                await broadcast_to_conversation(
+                    typing_in.conversation_id,
+                    typing_out.model_dump_json(),
+                    exclude_ws=websocket,
+                )
+
             elif frame_type == "subscribe":
                 # Dynamic subscription to new conversation
                 cid_str = frame_data.get("conversation_id")
@@ -283,7 +365,12 @@ async def websocket_gateway(websocket: WebSocket) -> None:
     finally:
         # Cleanup subscriptions on disconnect
         async with _lock:
+            _device_sockets[user.device_id].discard(websocket)
+            if not _device_sockets[user.device_id]:
+                _device_sockets.pop(user.device_id, None)
+
             for cid in list(_conversation_subscribers.keys()):
                 _conversation_subscribers[cid].discard(websocket)
                 if not _conversation_subscribers[cid]:
                     _conversation_subscribers.pop(cid, None)
+

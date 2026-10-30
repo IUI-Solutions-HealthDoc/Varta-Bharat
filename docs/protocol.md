@@ -15,6 +15,7 @@ Varta Bharat provides guaranteed, ordered, gapless messaging with idempotent ret
 - **Invariant I3 (Monotonic Cursors):** Delivery and read cursors (`delivered_seq`, `read_seq`) only move forward. `read_seq` can never exceed `delivered_seq`.
 - **Invariant I4 (Visibility Boundary):** A client will never receive messages with `seq < visible_from_seq`, nor can any messages be retrieved for conversations where membership has ended (`left_at IS NOT NULL`).
 - **Invariant I5 (Deterministic Realtime Hint):** Messages $\le 4\text{ KB}$ are delivered directly over the WebSocket `msg` frame. Messages $> 4\text{ KB}$ are broadcast as lightweight `msg_hint` frames, prompting the client to fetch via REST.
+- **Invariant I6 (Tombstone Append-Only Deletion):** Deleting a message never deletes the row from the database. A new entry with `kind='delete'` and `target_seq` is appended at `last_seq + 1`. Only the original author or a conversation admin may issue a deletion.
 
 ---
 
@@ -150,6 +151,28 @@ Fetch ordered messages within a conversation after a given sequence number.
   ],
   "has_more": false,
   "last_seq": 150
+}
+```
+
+---
+
+### 3.4 Message Deletion (Tombstone – P2)
+Deletes a message by appending a tombstone entry (`kind = "delete"`, `target_seq = target_seq`). The original message row is never deleted from the database (Invariant I6). Only the original sender or a conversation admin can delete messages.
+
+- **Endpoint:** `DELETE /v1/conversations/{conversation_id}/messages/{target_seq}`
+- **Headers:**
+  - `Authorization: Bearer <access_token>` (Required)
+  - `X-Idempotency-Key: <uuid>` (Optional, client deduplication)
+- **Permissions:** Message author OR conversation admin.
+
+#### Response Body (`DeleteMessageResponse`) – HTTP 200 OK
+```json
+{
+  "seq": 155,
+  "id": "0192df78-8bc4-7123-93df-520e5e4860f5",
+  "target_seq": 150,
+  "kind": "delete",
+  "created_at": "2026-10-30T10:20:00.000000Z"
 }
 ```
 

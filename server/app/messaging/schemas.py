@@ -183,3 +183,26 @@ class GetMessagesResponse(BaseModel):
         Field(description="True if there are additional newer messages to fetch."),
     ]
     last_seq: Annotated[int, Field(ge=0, description="Highest sequence returned in this batch.")]
+
+
+class DeleteMessageResponse(BaseModel):
+    """Response returned upon successfully creating a tombstone message deletion (P2)."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "seq": 155,
+                "id": "0192df78-8bc4-7123-93df-520e5e4860f5",
+                "target_seq": 150,
+                "kind": "delete",
+                "created_at": "2026-10-30T10:20:00.000000Z",
+            }
+        }
+    )
+
+    seq: Annotated[int, Field(ge=1, description="Sequence number of the tombstone entry.")]
+    id: Annotated[UUID, Field(description="UUIDv7 of the tombstone message.")]
+    target_seq: Annotated[int, Field(ge=1, description="Sequence number of the deleted message.")]
+    kind: Annotated[Literal["delete"], Field(default="delete", description="Tombstone kind.")]
+    created_at: Annotated[datetime, Field(description="Timestamp when deletion was recorded.")]
+

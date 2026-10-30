@@ -300,3 +300,120 @@ def test_ack_frame_advances_cursors_monotonically_and_broadcasts_receipt(conn):
             (conv_id, s["bob"]),
         ).fetchone()
         assert row2 == (5, 4)
+
+
+def test_message_deletion_tombstone_permissions_and_invariants(conn):
+    s = seed_chat(conn)
+    conv_id = s["conv"]
+    headers_alice = {"Authorization": f"Bearer {s['alice']}"}
+    headers_bob = {"Authorization": f"Bearer {s['bob']}"}
+
+    # 1. Alice sends message 1
+    r1 = client.post(
+        f"/v1/conversations/{conv_id}/messages",
+        json={"client_msg_id": str(uuid4()), "kind": "text", "body": "Original message"},
+        headers=headers_alice,
+    )
+    assert r1.status_code == 201
+    assert r1.json()["seq"] == 1
+
+    # 2. Bob sends message 2
+    r2 = client.post(
+        f"/v1/conversations/{conv_id}/messages",
+        json={"client_msg_id": str(uuid4()), "kind": "text", "body": "Bob message"},
+        headers=headers_bob,
+    )
+    assert r2.status_code == 201
+    assert r2.json()["seq"] == 2
+
+    # 3. Bob (non-admin) tries to delete Alice's message 1 -> 403 Forbidden
+    del_fail = client.delete(f"/v1/conversations/{conv_id}/messages/1", headers=headers_bob)
+    assert del_fail.status_code == 403
+
+    # 4. Deleting non-existent message -> 404
+    del_404 = client.delete(f"/v1/conversations/{conv_id}/messages/999", headers=headers_alice)
+    assert del_404.status_code == 404
+
+    # 5. Alice deletes her own message 1 -> 200 OK, tombstone seq=3
+    del_ok = client.delete(f"/v1/conversations/{conv_id}/messages/1", headers=headers_alice)
+    assert del_ok.status_code == 200
+    d = del_ok.json()
+    assert d["seq"] == 3
+    assert d["target_seq"] == 1
+    assert d["kind"] == "delete"
+
+    # Invariant I6: Original row is NOT deleted from database
+    orig_row = conn.execute(
+        "SELECT kind, body FROM messages WHERE conversation_id = %s AND seq = 1",
+        (conv_id,),
+    ).fetchone()
+    assert orig_row == ("text", "Original message")
+
+    # Tombstone row exists with target_seq=1, body=None
+    tomb_row = conn.execute(
+        "SELECT kind, target_seq, body FROM messages WHERE conversation_id = %s AND seq = 3",
+        (conv_id,),
+    ).fetchone()
+    assert tomb_row == ("delete", 1, None)
+
+    # 6. Alice (conversation admin) can delete Bob's message 2 -> 200 OK, tombstone seq=4
+    del_admin = client.delete(f"/v1/conversations/{conv_id}/messages/2", headers=headers_alice)
+    assert del_admin.status_code == 200
+    assert del_admin.json()["seq"] == 4
+    assert del_admin.json()["target_seq"] == 2
+
+
+def test_ws_typing_indicator(conn):
+    s = seed_chat(conn)
+    conv_id = s["conv"]
+    ticket_alice = f"test:{s['alice']}:{s['tenant']}"
+    ticket_bob = f"test:{s['bob']}:{s['tenant']}"
+
+    # Bob connects to listen for typing
+    with client.websocket_connect("/v1/ws") as ws_bob:
+        ws_bob.send_json({"type": "hello", "ticket": ticket_bob})
+        assert ws_bob.receive_json()["type"] == "welcome"
+
+        # Alice connects and emits typing frame
+        with client.websocket_connect("/v1/ws") as ws_alice:
+            ws_alice.send_json({"type": "hello", "ticket": ticket_alice})
+            assert ws_alice.receive_json()["type"] == "welcome"
+
+            ws_alice.send_json({
+                "type": "typing",
+                "conversation_id": str(conv_id),
+                "is_typing": True,
+            })
+
+            # Bob receives typing frame with Alice's user_id
+            frame = ws_bob.receive_json()
+            assert frame["type"] == "typing"
+            assert frame["conversation_id"] == str(conv_id)
+            assert frame["user_id"] == str(s["alice"])
+            assert frame["is_typing"] is True
+
+
+def test_ws_device_revocation(conn):
+    s = seed_chat(conn)
+    device_id = uuid4()
+    ticket_alice = f"test:{s['alice']}:{s['tenant']}:{device_id}"
+
+    with client.websocket_connect("/v1/ws") as ws:
+        ws.send_json({"type": "hello", "ticket": ticket_alice})
+        welcome = ws.receive_json()
+        assert welcome["type"] == "welcome"
+        assert welcome["device_id"] == str(device_id)
+
+        # Trigger device revocation via endpoint
+        rev_resp = client.post(
+            f"/v1/devices/{device_id}/revoke",
+            params={"reason": "Device lost or stolen"},
+        )
+        assert rev_resp.status_code == 200
+        assert rev_resp.json()["revoked"] is True
+
+        # Client receives revoked frame
+        rev_frame = ws.receive_json()
+        assert rev_frame["type"] == "revoked"
+        assert rev_frame["reason"] == "Device lost or stolen"
+

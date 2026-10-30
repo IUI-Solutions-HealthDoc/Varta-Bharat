@@ -12,19 +12,20 @@ from dataclasses import dataclass
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 import psycopg
 
 from app.config import settings
 from app.messaging.schemas import (
     ConversationSyncItem,
+    DeleteMessageResponse,
     GetMessagesResponse,
     MessageItem,
     SendMessageRequest,
     SendMessageResponse,
     SyncConversationsResponse,
 )
-from app.send import NotAllowed, send_message
+from app.send import NotAllowed, send_message, send_tombstone
 
 router = APIRouter(prefix="/v1", tags=["messaging"])
 
@@ -257,3 +258,57 @@ def get_messages_endpoint(
         has_more=has_more,
         last_seq=highest_seq,
     )
+
+
+@router.delete(
+    "/conversations/{conversation_id}/messages/{target_seq}",
+    response_model=DeleteMessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Delete a message (tombstone)",
+    description=(
+        "Appends a tombstone message deletion (kind='delete', target_seq=target_seq). "
+        "The message row is never deleted from the database (Invariant I6). "
+        "Only the original message sender or a conversation admin may delete a message."
+    ),
+)
+def delete_message_endpoint(
+    conversation_id: UUID,
+    target_seq: Annotated[int, Path(ge=1, description="Sequence number of message to delete")],
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    x_idempotency_key: Annotated[str | None, Header()] = None,
+) -> DeleteMessageResponse:
+    """Tombstone message deletion endpoint."""
+    client_msg_id = None
+    if x_idempotency_key:
+        try:
+            client_msg_id = UUID(x_idempotency_key)
+        except ValueError:
+            pass
+
+    with get_conn() as conn:
+        try:
+            sent = send_tombstone(
+                conn,
+                conversation_id=conversation_id,
+                actor_id=user.id,
+                target_seq=target_seq,
+                client_msg_id=client_msg_id,
+            )
+        except NotAllowed as exc:
+            msg = str(exc)
+            if "not found" in msg.lower():
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=msg) from exc
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=msg) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+
+    return DeleteMessageResponse(
+        seq=sent.seq,
+        id=sent.id,
+        target_seq=target_seq,
+        kind="delete",
+        created_at=sent.created_at,
+    )
+
