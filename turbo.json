@@ -9,6 +9,9 @@
       "cache": false,
       "persistent": true
     },
+    "generate": {
+      "outputs": ["src/schema.d.ts"]
+    },
     "lint": {},
     "test": {
       "dependsOn": ["^build"]

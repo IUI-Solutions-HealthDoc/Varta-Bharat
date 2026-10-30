@@ -1,5 +1,13 @@
 {
   "name": "@varta/protocol",
   "version": "0.0.0",
-  "private": true
+  "private": true,
+  "types": "src/schema.d.ts",
+  "scripts": {
+    "generate": "openapi-typescript openapi.json -o src/schema.d.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
 }
