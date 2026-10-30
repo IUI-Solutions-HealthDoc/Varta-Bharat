@@ -30,3 +30,6 @@ TypeScript workspaces need Node 22+ and pnpm 10: run `pnpm install` at the repo 
 - `infra/`: IaC, k6 load scripts, Toxiproxy scenarios (OPS-1)
 - `docs/threat-model/`: STRIDE threat model (plan section 9.1)
 - `.github/workflows/ci.yml`: lint, migration up/down/up, tests, gitleaks
+
+
+#
