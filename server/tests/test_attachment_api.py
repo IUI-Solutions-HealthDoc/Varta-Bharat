@@ -29,6 +29,7 @@ def client(db_url, monkeypatch):
     db.close_pool()
     storage = FakeStorage()
     app.dependency_overrides[get_storage] = lambda: storage
+    monkeypatch.setattr("app.media.router.enqueue_processing", lambda attachment_id: None)
     with TestClient(app) as c:
         c.storage = storage
         yield c

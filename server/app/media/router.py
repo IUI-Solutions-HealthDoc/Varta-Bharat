@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.core.db import get_conn
 from app.media.deps import AuthUser, current_user
 from app.media.storage import MAX_UPLOAD_BYTES, PRESIGN_SECONDS, Storage, get_storage
+from app.media.tasks import enqueue_processing
 
 router = APIRouter(prefix="/v1/attachments", tags=["attachments"])
 
@@ -93,5 +94,5 @@ def complete_attachment(
             conn.execute("UPDATE attachments SET state = 'rejected' WHERE id = %s", (attachment_id,))
             return AttachmentOut(id=attachment_id, state="rejected")
         conn.execute("UPDATE attachments SET byte_size = %s WHERE id = %s", (size, attachment_id))
-    # Stays pending: the worker (size/MIME/thumbnail checks) is what marks it ready.
+    enqueue_processing(attachment_id)  # the worker marks it ready or rejected
     return AttachmentOut(id=attachment_id, state="pending")
