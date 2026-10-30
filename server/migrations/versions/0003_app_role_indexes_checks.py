@@ -7,6 +7,7 @@ The app connects as varta_api (member of varta_app), not as the table owner, so 
 append-only audit_log is enforced. Migrations keep using the owner via ALEMBIC_DATABASE_URL.
 Roles are cluster-wide, so downgrade leaves varta_api in place (same as varta_app in 0002).
 """
+
 import os
 import re
 

@@ -14,7 +14,12 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6"]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+    "ruff>=0.6",
+    "hypothesis>=6.170.14",
+]
 
 [tool.uv]
 package = false

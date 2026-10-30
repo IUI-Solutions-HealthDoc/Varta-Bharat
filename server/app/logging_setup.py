@@ -3,7 +3,16 @@
 import json
 import logging
 
-DENY_KEYS = {"body", "token", "otp", "password", "authorization", "ticket", "refresh_token", "secret"}
+DENY_KEYS = {
+    "body",
+    "token",
+    "otp",
+    "password",
+    "authorization",
+    "ticket",
+    "refresh_token",
+    "secret",
+}
 
 
 def redact(value):
