@@ -9,6 +9,8 @@ dependencies = [
   "alembic>=1.13",
   "psycopg[binary]>=3.2",
   "pydantic-settings>=2.4",
+  "psycopg-pool>=3.3.3",
+  "valkey>=6.2.0",
 ]
 
 [dependency-groups]
