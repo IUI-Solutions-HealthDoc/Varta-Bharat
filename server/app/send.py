@@ -166,6 +166,8 @@ def send_message(
     if body is not None:
         if len(body) > 8000:
             raise ValueError("Message body exceeds 8000 characters limit.")
+        if "\x00" in body:
+            raise ValueError("Message body cannot contain NUL bytes.")
         body = unicodedata.normalize("NFC", body)
     elif kind == "text":
         raise ValueError("Text messages must include a body.")

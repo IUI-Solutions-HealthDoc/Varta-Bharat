@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import logging
 
 import psycopg
@@ -11,7 +12,18 @@ from app.ws import router as ws_router
 setup_logging()
 log = logging.getLogger("varta")
 
-app = FastAPI(title="Varta Bharat API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.environment != "local":
+        raise RuntimeError(
+            f"Refusing to start with dev authentication stub in environment '{settings.environment}'. "
+            "Real auth (BE-2) is required outside ENVIRONMENT=local."
+        )
+    yield
+
+
+app = FastAPI(title="Varta Bharat API", version="0.1.0", lifespan=lifespan)
 app.include_router(messaging_router)
 app.include_router(ws_router)
 

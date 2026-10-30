@@ -35,7 +35,7 @@ def use_test_db(db_url, monkeypatch):
 # -----------------------------------------------------------------------------
 @hyp_settings(max_examples=15, deadline=None)
 @given(
-    body=st.text(min_size=1, max_size=200).filter(lambda s: bool(s.strip())),
+    body=st.text(min_size=1, max_size=200).filter(lambda s: bool(s.strip()) and "\x00" not in s),
     num_retries=st.integers(min_value=1, max_value=5),
 )
 def test_property_i1_idempotency_retries_produce_single_message(db_url, body, num_retries):
@@ -84,7 +84,7 @@ def test_property_i1_idempotency_retries_produce_single_message(db_url, body, nu
     actions=st.lists(
         st.tuples(
             st.sampled_from(["valid", "retry_last", "invalid_kind", "invalid_user"]),
-            st.text(min_size=1, max_size=100).filter(lambda s: bool(s.strip())),
+            st.text(min_size=1, max_size=100).filter(lambda s: bool(s.strip()) and "\x00" not in s),
         ),
         min_size=3,
         max_size=10,

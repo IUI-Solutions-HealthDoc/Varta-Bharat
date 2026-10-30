@@ -11,6 +11,24 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class WsTicketResponse(BaseModel):
+    """Response returned by POST /v1/ws-ticket."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "ticket": "wstk_8f91a2c3d4e5f67890abcdef",
+                "expires_in": 30,
+            }
+        }
+    )
+
+    ticket: Annotated[
+        str, Field(description="Single-use, 30s ticket for WebSocket authentication.")
+    ]
+    expires_in: Annotated[int, Field(default=30, description="Ticket expiration time in seconds.")]
+
+
 class HelloFrame(BaseModel):
     """Initial client frame containing authentication ticket."""
 
@@ -23,6 +41,22 @@ class HelloFrame(BaseModel):
         str,
         Field(description="Single-use, 30s ticket issued by POST /v1/ws-ticket."),
     ]
+
+
+class SubscribeFrame(BaseModel):
+    """Client frame requesting real-time message subscription to a conversation."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "type": "subscribe",
+                "conversation_id": "c1a2b3c4-d5e6-7f80-91a2-b3c4d5e6f7a8",
+            }
+        }
+    )
+
+    type: Annotated[Literal["subscribe"], Field(default="subscribe")]
+    conversation_id: Annotated[UUID, Field(description="Conversation ID to subscribe to.")]
 
 
 class AckFrame(BaseModel):
@@ -86,7 +120,9 @@ class WelcomeFrame(BaseModel):
     )
 
     type: Annotated[Literal["welcome"], Field(default="welcome")]
-    heartbeat_s: Annotated[int, Field(default=25, description="Heartbeat ping interval in seconds.")]
+    heartbeat_s: Annotated[
+        int, Field(default=25, description="Heartbeat ping interval in seconds.")
+    ]
     user_id: Annotated[UUID, Field(description="Authenticated user UUID.")]
     device_id: Annotated[UUID, Field(description="Registered device UUID.")]
 

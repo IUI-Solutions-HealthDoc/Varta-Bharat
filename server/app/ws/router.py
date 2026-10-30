@@ -16,12 +16,15 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import logging
+import secrets
+from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 import psycopg
 
 from app.config import settings
+from app.messaging.router import AuthUser, get_current_user
 from app.ws.schemas import (
     AckFrame,
     ErrorFrame,
@@ -29,8 +32,10 @@ from app.ws.schemas import (
     MsgHintFrame,
     ReceiptFrame,
     RevokedFrame,
+    SubscribeFrame,
     TypingFrame,
     WelcomeFrame,
+    WsTicketResponse,
 )
 
 router = APIRouter(prefix="/v1", tags=["realtime"])
@@ -50,10 +55,9 @@ _device_sockets: dict[UUID, set[WebSocket]] = defaultdict(set)
 _lock = asyncio.Lock()
 
 
-
 def redeem_ws_ticket(ticket: str) -> WsUser | None:
-    """Validate and redeem a single-use WebSocket ticket (Member 2 contract)."""
-    # 1. Try Valkey if available
+    """Validate and redeem a single-use WebSocket ticket (Plan D-5 / Member 2 contract)."""
+    # 1. Valkey single-use ticket check
     try:
         import valkey
 
@@ -62,9 +66,13 @@ def redeem_ws_ticket(ticket: str) -> WsUser | None:
             url = "valkey://" + url.removeprefix("redis://")
         client = valkey.Valkey.from_url(url, decode_responses=True)
         key = f"ws_ticket:{ticket}"
-        raw = client.get(key)
+        try:
+            raw = client.getdel(key)
+        except AttributeError:
+            raw = client.get(key)
+            if raw:
+                client.delete(key)
         if raw:
-            client.delete(key)  # single-use
             data = json.loads(raw)
             return WsUser(
                 id=UUID(data["user_id"]),
@@ -72,25 +80,84 @@ def redeem_ws_ticket(ticket: str) -> WsUser | None:
                 device_id=UUID(data.get("device_id") or str(uuid4())),
             )
     except Exception as exc:  # noqa: BLE001
-        log.debug("Valkey ticket lookup skipped: %s", exc)
+        log.debug("Valkey ticket lookup failed: %s", exc)
 
     # 2. Test / Dev ticket format: test:<user_id>:<tenant_id> or test:<user_id>:<tenant_id>:<device_id>
-    if ticket.startswith("test:"):
+    # Allowed ONLY when settings.environment == "local"
+    if settings.environment == "local" and ticket.startswith("test:"):
         parts = ticket.split(":")
-        user_id = UUID(parts[1]) if len(parts) > 1 else uuid4()
-        tenant_id = UUID(parts[2]) if len(parts) > 2 else uuid4()
-        device_id = UUID(parts[3]) if len(parts) > 3 else uuid4()
-        return WsUser(id=user_id, tenant_id=tenant_id, device_id=device_id)
-
-    if ticket.startswith("wstk_") or len(ticket) >= 16:
-        # Valid format stub for integration testing
-        return WsUser(
-            id=UUID("0192df78-0000-7000-8000-000000000001"),
-            tenant_id=UUID("0192df78-0000-7000-8000-000000000002"),
-            device_id=UUID("0192df78-0000-7000-8000-000000000003"),
-        )
+        try:
+            user_id = UUID(parts[1]) if len(parts) > 1 else uuid4()
+            tenant_id = UUID(parts[2]) if len(parts) > 2 else uuid4()
+            device_id = UUID(parts[3]) if len(parts) > 3 else uuid4()
+            return WsUser(id=user_id, tenant_id=tenant_id, device_id=device_id)
+        except (ValueError, IndexError):
+            return None
 
     return None
+
+
+def check_active_conversation_membership(user_id: UUID, conversation_id: UUID) -> bool:
+    """Verify active membership: left_at IS NULL, tenant member not removed, user active."""
+    try:
+        with psycopg.connect(settings.database_url, autocommit=True) as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM conversation_members cm
+                JOIN conversations c ON c.id = cm.conversation_id
+                JOIN tenant_members tm ON tm.tenant_id = c.tenant_id AND tm.user_id = cm.user_id
+                JOIN users u ON u.id = cm.user_id
+                WHERE cm.conversation_id = %s
+                  AND cm.user_id = %s
+                  AND cm.left_at IS NULL
+                  AND tm.removed_at IS NULL
+                  AND u.status = 'active'
+                """,
+                (conversation_id, user_id),
+            ).fetchone()
+            return row is not None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not verify active conversation membership: %s", exc)
+        return False
+
+
+@router.post(
+    "/ws-ticket",
+    response_model=WsTicketResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Issue WebSocket ticket (Plan D-5)",
+    description="Issues a single-use ticket stored in Valkey with a 30s TTL for WebSocket authentication.",
+)
+def create_ws_ticket_endpoint(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> WsTicketResponse:
+    import valkey
+
+    ticket = f"wstk_{secrets.token_hex(16)}"
+    key = f"ws_ticket:{ticket}"
+    val = json.dumps(
+        {
+            "user_id": str(user.id),
+            "tenant_id": str(user.tenant_id),
+            "device_id": str(user.device_id),
+        }
+    )
+
+    url = settings.valkey_url
+    if url.startswith("redis://"):
+        url = "valkey://" + url.removeprefix("redis://")
+    try:
+        client = valkey.Valkey.from_url(url, decode_responses=True)
+        client.set(key, val, ex=30)
+    except Exception as exc:
+        log.error("Failed storing ticket in Valkey: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Ticket storage service unavailable",
+        ) from exc
+
+    return WsTicketResponse(ticket=ticket, expires_in=30)
 
 
 async def broadcast_to_conversation(
@@ -99,9 +166,7 @@ async def broadcast_to_conversation(
     """Broadcast an outgoing frame to active WebSocket connections in a conversation."""
     async with _lock:
         sockets = [
-            ws
-            for ws in _conversation_subscribers.get(conversation_id, set())
-            if ws != exclude_ws
+            ws for ws in _conversation_subscribers.get(conversation_id, set()) if ws != exclude_ws
         ]
 
     for ws in sockets:
@@ -155,7 +220,6 @@ async def revoke_device_endpoint(
 ) -> dict:
     revoked = await revoke_device_session(device_id, reason)
     return {"revoked": revoked, "device_id": str(device_id)}
-
 
 
 def broadcast_realtime_message(
@@ -246,8 +310,17 @@ async def websocket_gateway(websocket: WebSocket) -> None:
     try:
         with psycopg.connect(settings.database_url, autocommit=True) as conn:
             rows = conn.execute(
-                "SELECT conversation_id FROM conversation_members "
-                "WHERE user_id = %s AND left_at IS NULL",
+                """
+                SELECT cm.conversation_id
+                FROM conversation_members cm
+                JOIN conversations c ON c.id = cm.conversation_id
+                JOIN tenant_members tm ON tm.tenant_id = c.tenant_id AND tm.user_id = cm.user_id
+                JOIN users u ON u.id = cm.user_id
+                WHERE cm.user_id = %s
+                  AND cm.left_at IS NULL
+                  AND tm.removed_at IS NULL
+                  AND u.status = 'active'
+                """,
                 (user.id,),
             ).fetchall()
             subscribed_convs = {r[0] for r in rows}
@@ -290,6 +363,17 @@ async def websocket_gateway(websocket: WebSocket) -> None:
                     await websocket.send_text(err.model_dump_json())
                     continue
 
+                # Check active conversation membership before subscribing or acking
+                if ack.conversation_id not in subscribed_convs:
+                    if not check_active_conversation_membership(user.id, ack.conversation_id):
+                        err = ErrorFrame(
+                            code="FORBIDDEN",
+                            message="Not an active member of conversation",
+                        )
+                        await websocket.send_text(err.model_dump_json())
+                        continue
+                    subscribed_convs.add(ack.conversation_id)
+
                 # Ensure socket is subscribed to this conversation
                 async with _lock:
                     _conversation_subscribers[ack.conversation_id].add(websocket)
@@ -331,6 +415,17 @@ async def websocket_gateway(websocket: WebSocket) -> None:
                     await websocket.send_text(err.model_dump_json())
                     continue
 
+                # Check active conversation membership before subscribing or broadcasting typing
+                if typing_in.conversation_id not in subscribed_convs:
+                    if not check_active_conversation_membership(user.id, typing_in.conversation_id):
+                        err = ErrorFrame(
+                            code="FORBIDDEN",
+                            message="Not an active member of conversation",
+                        )
+                        await websocket.send_text(err.model_dump_json())
+                        continue
+                    subscribed_convs.add(typing_in.conversation_id)
+
                 # Ensure socket is subscribed
                 async with _lock:
                     _conversation_subscribers[typing_in.conversation_id].add(websocket)
@@ -347,15 +442,26 @@ async def websocket_gateway(websocket: WebSocket) -> None:
                 )
 
             elif frame_type == "subscribe":
-                # Dynamic subscription to new conversation
-                cid_str = frame_data.get("conversation_id")
-                if cid_str:
-                    try:
-                        cid = UUID(cid_str)
-                        async with _lock:
-                            _conversation_subscribers[cid].add(websocket)
-                    except ValueError:
-                        pass
+                try:
+                    sub = SubscribeFrame.model_validate(frame_data)
+                except Exception as exc:  # noqa: BLE001
+                    err = ErrorFrame(code="MALFORMED_SUBSCRIBE", message=str(exc))
+                    await websocket.send_text(err.model_dump_json())
+                    continue
+
+                # Check active conversation membership before subscribing
+                if sub.conversation_id not in subscribed_convs:
+                    if not check_active_conversation_membership(user.id, sub.conversation_id):
+                        err = ErrorFrame(
+                            code="FORBIDDEN",
+                            message="Not an active member of conversation",
+                        )
+                        await websocket.send_text(err.model_dump_json())
+                        continue
+                    subscribed_convs.add(sub.conversation_id)
+
+                async with _lock:
+                    _conversation_subscribers[sub.conversation_id].add(websocket)
             else:
                 # Working rule: safely ignore unknown frame types
                 log.debug("Ignored unknown frame type: %s", frame_type)
@@ -373,4 +479,3 @@ async def websocket_gateway(websocket: WebSocket) -> None:
                 _conversation_subscribers[cid].discard(websocket)
                 if not _conversation_subscribers[cid]:
                     _conversation_subscribers.pop(cid, None)
-

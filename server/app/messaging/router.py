@@ -59,6 +59,12 @@ def get_current_user(
     x_device_id: Annotated[str | None, Header()] = None,
 ) -> AuthUser:
     """Dependency extracting authenticated user context from token or headers."""
+    if settings.environment != "local":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Dev authentication stub is not permitted outside ENVIRONMENT=local until real auth (BE-2) lands",
+        )
+
     user_id = None
     if authorization and authorization.startswith("Bearer "):
         token = authorization.removeprefix("Bearer ").strip()
@@ -179,14 +185,12 @@ def sync_conversations_endpoint(
 )
 def get_messages_endpoint(
     conversation_id: UUID,
-    after: Annotated[
-        int, Query(ge=0, description="Retrieve messages strictly after this seq")
-    ] = 0,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    after: Annotated[int, Query(ge=0, description="Retrieve messages strictly after this seq")] = 0,
     limit: Annotated[int, Query(ge=1, le=200, description="Maximum messages to return")] = 50,
-    user: Annotated[AuthUser, Depends(get_current_user)] = None,
 ) -> GetMessagesResponse:
     """Fetch paginated messages respecting Invariant I4 (visibility and left conversations)."""
-    user_id = user.id if user else UUID("0192df78-0000-7000-8000-000000000001")
+    user_id = user.id
 
     with get_conn() as conn:
         # Check membership and left_at
@@ -311,4 +315,3 @@ def delete_message_endpoint(
         kind="delete",
         created_at=sent.created_at,
     )
-
