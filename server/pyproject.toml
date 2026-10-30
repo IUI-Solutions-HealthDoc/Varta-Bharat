@@ -12,6 +12,8 @@ dependencies = [
   "psycopg-pool>=3.3.3",
   "valkey>=6.2.0",
   "boto3>=1.43.122",
+  "filetype>=1.2.0",
+  "pillow>=13.0.0",
 ]
 
 [dependency-groups]
