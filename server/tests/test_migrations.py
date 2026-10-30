@@ -4,17 +4,26 @@ from tests.helpers import TEST_URL, downgrade, ensure_db, upgrade
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 EXPECTED = {
-    "tenants", "users", "tenant_members", "communities", "conversations",
-    "conversation_members", "attachments", "messages", "invitations",
-    "contact_nicknames", "user_blocks", "reports", "devices", "audit_log",
+    "tenants",
+    "users",
+    "tenant_members",
+    "communities",
+    "conversations",
+    "conversation_members",
+    "attachments",
+    "messages",
+    "invitations",
+    "contact_nicknames",
+    "user_blocks",
+    "reports",
+    "devices",
+    "audit_log",
 }
 
 
 def _tables(url):
     with psycopg.connect(url) as c:
-        rows = c.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
-        ).fetchall()
+        rows = c.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").fetchall()
     return {r[0] for r in rows}
 
 

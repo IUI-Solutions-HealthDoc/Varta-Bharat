@@ -87,8 +87,10 @@ def test_fault_post_commit_valkey_outage_does_not_abort_message(db_url):
         conv_id = s["conv"]
         alice_id = s["alice"]
 
-        with patch("valkey.Valkey.from_url") as mock_valkey:
-            mock_valkey.side_effect = ConnectionError("Valkey cluster unreachable (simulated fault)")
+        with patch("app.core.valkey.get_valkey") as mock_valkey:
+            mock_valkey.side_effect = ConnectionError(
+                "Valkey cluster unreachable (simulated fault)"
+            )
 
             # Send should succeed despite Valkey outage
             sent = send_message(

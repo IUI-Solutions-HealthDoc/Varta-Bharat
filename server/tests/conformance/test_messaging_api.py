@@ -27,7 +27,6 @@ def use_test_db(db_url, monkeypatch):
     monkeypatch.setattr(settings, "database_url", db_url)
 
 
-
 def test_rest_post_message_and_idempotent_retry(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
@@ -233,12 +232,14 @@ def test_offline_client_reconnect_gapless_sync(conn):
         assert [m["seq"] for m in msgs] == [1, 2, 3]
 
         # Step 4: Bob sends ack advancing cursors
-        ws_bob.send_json({
-            "type": "ack",
-            "conversation_id": str(conv_id),
-            "delivered_seq": 3,
-            "read_seq": 3,
-        })
+        ws_bob.send_json(
+            {
+                "type": "ack",
+                "conversation_id": str(conv_id),
+                "delivered_seq": 3,
+                "read_seq": 3,
+            }
+        )
 
 
 def test_ack_frame_advances_cursors_monotonically_and_broadcasts_receipt(conn):
@@ -251,23 +252,27 @@ def test_ack_frame_advances_cursors_monotonically_and_broadcasts_receipt(conn):
         assert ws_bob.receive_json()["type"] == "welcome"
 
         # Invalid ack: read_seq > delivered_seq rejected
-        ws_bob.send_json({
-            "type": "ack",
-            "conversation_id": str(conv_id),
-            "delivered_seq": 2,
-            "read_seq": 5,
-        })
+        ws_bob.send_json(
+            {
+                "type": "ack",
+                "conversation_id": str(conv_id),
+                "delivered_seq": 2,
+                "read_seq": 5,
+            }
+        )
         err = ws_bob.receive_json()
         assert err["type"] == "error"
         assert err["code"] == "INVALID_ACK"
 
         # Valid ack: Bob delivers seq 5, reads seq 4
-        ws_bob.send_json({
-            "type": "ack",
-            "conversation_id": str(conv_id),
-            "delivered_seq": 5,
-            "read_seq": 4,
-        })
+        ws_bob.send_json(
+            {
+                "type": "ack",
+                "conversation_id": str(conv_id),
+                "delivered_seq": 5,
+                "read_seq": 4,
+            }
+        )
         receipt = ws_bob.receive_json()
         assert receipt["type"] == "receipt"
         assert receipt["conversation_id"] == str(conv_id)
@@ -284,12 +289,14 @@ def test_ack_frame_advances_cursors_monotonically_and_broadcasts_receipt(conn):
         assert row == (5, 4)
 
         # Monotonicity test: Bob sends smaller cursors (delivered 2, read 1)
-        ws_bob.send_json({
-            "type": "ack",
-            "conversation_id": str(conv_id),
-            "delivered_seq": 2,
-            "read_seq": 1,
-        })
+        ws_bob.send_json(
+            {
+                "type": "ack",
+                "conversation_id": str(conv_id),
+                "delivered_seq": 2,
+                "read_seq": 1,
+            }
+        )
         receipt2 = ws_bob.receive_json()
         assert receipt2["type"] == "receipt"
 
@@ -379,11 +386,13 @@ def test_ws_typing_indicator(conn):
             ws_alice.send_json({"type": "hello", "ticket": ticket_alice})
             assert ws_alice.receive_json()["type"] == "welcome"
 
-            ws_alice.send_json({
-                "type": "typing",
-                "conversation_id": str(conv_id),
-                "is_typing": True,
-            })
+            ws_alice.send_json(
+                {
+                    "type": "typing",
+                    "conversation_id": str(conv_id),
+                    "is_typing": True,
+                }
+            )
 
             # Bob receives typing frame with Alice's user_id
             frame = ws_bob.receive_json()
@@ -417,3 +426,53 @@ def test_ws_device_revocation(conn):
         assert rev_frame["type"] == "revoked"
         assert rev_frame["reason"] == "Device lost or stolen"
 
+
+def test_send_message_with_nul_byte_returns_422(conn):
+    s = seed_chat(conn)
+    conv_id = s["conv"]
+    alice_id = s["alice"]
+    headers = {"Authorization": f"Bearer {alice_id}"}
+    payload = {
+        "client_msg_id": str(uuid4()),
+        "kind": "text",
+        "body": "bad\x00message",
+    }
+    r = client.post(f"/v1/conversations/{conv_id}/messages", json=payload, headers=headers)
+    assert r.status_code == 422
+    assert "NUL" in r.text
+
+
+def test_valkey_channel_fanout_delivers_to_websocket(conn):
+    """Verifies that publishing to Valkey conv:{id} fans out to connected WebSockets across instances."""
+    import json
+    from datetime import datetime, UTC
+    from app.core.valkey import get_valkey
+
+    s = seed_chat(conn)
+    conv_id = s["conv"]
+    bob_ticket = f"test:{s['bob']}:{s['tenant']}"
+
+    with client.websocket_connect("/v1/ws") as ws_bob:
+        ws_bob.send_json({"type": "hello", "ticket": bob_ticket})
+        welcome = ws_bob.receive_json()
+        assert welcome["type"] == "welcome"
+
+        # Simulate another API instance publishing to Valkey channel conv:{id}
+        valkey_client = get_valkey()
+        msg_payload = {
+            "conversation_id": str(conv_id),
+            "seq": 42,
+            "id": str(uuid4()),
+            "sender_id": str(s["alice"]),
+            "kind": "text",
+            "body": "Multi-instance fan-out via Valkey!",
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        valkey_client.publish(f"conv:{conv_id}", json.dumps(msg_payload))
+
+        # Connected WebSocket must receive the message frame
+        ws_msg = ws_bob.receive_json()
+        assert ws_msg["type"] == "msg"
+        assert ws_msg["conversation_id"] == str(conv_id)
+        assert ws_msg["seq"] == 42
+        assert ws_msg["body"] == "Multi-instance fan-out via Valkey!"

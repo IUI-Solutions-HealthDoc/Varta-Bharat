@@ -3,7 +3,7 @@
 Handles the /v1/ws connection lifecycle:
 - Handshake: Expects 'hello' frame with ticket (redeem_ws_ticket).
 - Welcome: Responds with 'welcome' frame (heartbeat_s=25).
-- Pub/Sub: Subscribes to conversation channels and broadcasts real-time messages.
+- Pub/Sub: Subscribes to conversation channels via Valkey and broadcasts real-time messages.
 - Outgoing: Sends 'msg' frame if <= 4 KB, or 'msg_hint' frame if > 4 KB.
 - Incoming: Handles 'ack' frames, enforces monotonic cursors (read_seq <= delivered_seq),
   and broadcasts 'receipt' frames to participants.
@@ -13,7 +13,7 @@ Handles the /v1/ws connection lifecycle:
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 import json
 import logging
 import secrets
@@ -21,9 +21,10 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
-import psycopg
 
 from app.config import settings
+from app.core.db import get_conn
+from app.core.valkey import get_valkey
 from app.messaging.router import AuthUser, get_current_user
 from app.ws.schemas import (
     AckFrame,
@@ -54,17 +55,16 @@ _conversation_subscribers: dict[UUID, set[WebSocket]] = defaultdict(set)
 _device_sockets: dict[UUID, set[WebSocket]] = defaultdict(set)
 _lock = asyncio.Lock()
 
+# Background Valkey Pub/Sub subscriber state
+_valkey_sub_task: asyncio.Task | None = None
+_valkey_subscribed_event: asyncio.Event | None = None
+
 
 def redeem_ws_ticket(ticket: str) -> WsUser | None:
     """Validate and redeem a single-use WebSocket ticket (Plan D-5 / Member 2 contract)."""
-    # 1. Valkey single-use ticket check
+    # 1. Valkey single-use ticket check using shared client
     try:
-        import valkey
-
-        url = settings.valkey_url
-        if url.startswith("redis://"):
-            url = "valkey://" + url.removeprefix("redis://")
-        client = valkey.Valkey.from_url(url, decode_responses=True)
+        client = get_valkey()
         key = f"ws_ticket:{ticket}"
         try:
             raw = client.getdel(key)
@@ -100,7 +100,7 @@ def redeem_ws_ticket(ticket: str) -> WsUser | None:
 def check_active_conversation_membership(user_id: UUID, conversation_id: UUID) -> bool:
     """Verify active membership: left_at IS NULL, tenant member not removed, user active."""
     try:
-        with psycopg.connect(settings.database_url, autocommit=True) as conn:
+        with get_conn() as conn:
             row = conn.execute(
                 """
                 SELECT 1
@@ -132,8 +132,6 @@ def check_active_conversation_membership(user_id: UUID, conversation_id: UUID) -
 def create_ws_ticket_endpoint(
     user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> WsTicketResponse:
-    import valkey
-
     ticket = f"wstk_{secrets.token_hex(16)}"
     key = f"ws_ticket:{ticket}"
     val = json.dumps(
@@ -144,11 +142,8 @@ def create_ws_ticket_endpoint(
         }
     )
 
-    url = settings.valkey_url
-    if url.startswith("redis://"):
-        url = "valkey://" + url.removeprefix("redis://")
     try:
-        client = valkey.Valkey.from_url(url, decode_responses=True)
+        client = get_valkey()
         client.set(key, val, ex=30)
     except Exception as exc:
         log.error("Failed storing ticket in Valkey: %s", exc)
@@ -232,10 +227,9 @@ def broadcast_realtime_message(
     body: str | None = None,
     attachment_id: UUID | None = None,
 ) -> None:
-    """Synchronous hook called by send_message / publish_hint to broadcast to active subscribers."""
+    """Direct broadcast to in-process sockets (fallback if Valkey is down)."""
     body_bytes = body.encode("utf-8") if body else b""
 
-    # Outgoing rules: If <= 4096 bytes send full 'msg' frame, else 'msg_hint' frame
     if len(body_bytes) <= 4096:
         frame = MsgFrame(
             conversation_id=conversation_id,
@@ -263,8 +257,125 @@ def broadcast_realtime_message(
         loop = asyncio.get_running_loop()
         loop.create_task(broadcast_to_conversation(conversation_id, frame_json))
     except RuntimeError:
-        # Outside event loop, run directly
         asyncio.run(broadcast_to_conversation(conversation_id, frame_json))
+
+
+async def _handle_valkey_message(data_str: str | None) -> None:
+    """Deliver a message received from Valkey conv:{id} to local connected WebSockets."""
+    if not data_str:
+        return
+    try:
+        data = json.loads(data_str)
+        if not isinstance(data, dict):
+            return
+
+        conv_id_str = data.get("conversation_id")
+        if not conv_id_str:
+            return
+        conv_id = UUID(conv_id_str)
+
+        async with _lock:
+            has_subscribers = bool(_conversation_subscribers.get(conv_id))
+        if not has_subscribers:
+            return
+
+        seq = int(data["seq"])
+        message_id = UUID(data["id"])
+        sender_id = UUID(data["sender_id"])
+        kind = data.get("kind", "text")
+        created_at_raw = data.get("created_at")
+        created_at = datetime.fromisoformat(created_at_raw) if created_at_raw else datetime.now(UTC)
+        body = data.get("body")
+        attachment_id = UUID(data["attachment_id"]) if data.get("attachment_id") else None
+
+        body_bytes = body.encode("utf-8") if body is not None else b""
+        if body is not None and len(body_bytes) <= 4096:
+            frame = MsgFrame(
+                conversation_id=conv_id,
+                seq=seq,
+                id=message_id,
+                sender_id=sender_id,
+                kind=kind,
+                body=body,
+                attachment_id=attachment_id,
+                created_at=created_at,
+            )
+        else:
+            frame = MsgHintFrame(
+                conversation_id=conv_id,
+                seq=seq,
+                id=message_id,
+                sender_id=sender_id,
+                kind=kind,
+                created_at=created_at,
+            )
+
+        await broadcast_to_conversation(conv_id, frame.model_dump_json())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed processing Valkey realtime frame: %s", exc)
+
+
+async def _valkey_subscriber_loop() -> None:
+    """Background task listening on Valkey conv:* channel and fanning out to local WebSockets (plan section 6)."""
+    import valkey.asyncio as valkey_async
+
+    while True:
+        ps = None
+        client = None
+        try:
+            url = settings.valkey_url
+            if url.startswith("redis://"):
+                url = "valkey://" + url.removeprefix("redis://")
+            client = valkey_async.from_url(url, decode_responses=True)
+            ps = client.pubsub()
+            await ps.psubscribe("conv:*")
+            if _valkey_subscribed_event is not None:
+                _valkey_subscribed_event.set()
+
+            async for msg in ps.listen():
+                if msg.get("type") == "pmessage":
+                    await _handle_valkey_message(msg.get("data"))
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Valkey pubsub subscriber connection error: %s; reconnecting...", exc)
+            await asyncio.sleep(1)
+        finally:
+            if ps is not None:
+                try:
+                    await ps.aclose()
+                except Exception:
+                    pass
+            if client is not None:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
+
+
+async def ensure_valkey_subscriber() -> None:
+    """Ensure the Valkey pub/sub fan-out task is running."""
+    global _valkey_sub_task, _valkey_subscribed_event
+    if _valkey_sub_task is None or _valkey_sub_task.done():
+        _valkey_subscribed_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        _valkey_sub_task = loop.create_task(_valkey_subscriber_loop())
+        try:
+            await asyncio.wait_for(_valkey_subscribed_event.wait(), timeout=1.0)
+        except (TimeoutError, Exception) as exc:
+            log.debug("Valkey subscriber initial wait timed out: %s", exc)
+
+
+async def stop_valkey_subscriber() -> None:
+    """Cancel the Valkey subscriber task on shutdown."""
+    global _valkey_sub_task
+    if _valkey_sub_task and not _valkey_sub_task.done():
+        _valkey_sub_task.cancel()
+        try:
+            await _valkey_sub_task
+        except asyncio.CancelledError:
+            pass
+        _valkey_sub_task = None
 
 
 @router.websocket("/ws")
@@ -297,6 +408,9 @@ async def websocket_gateway(websocket: WebSocket) -> None:
         await websocket.close(code=1008)
         return
 
+    # Ensure Valkey pub/sub fan-out listener is running
+    await ensure_valkey_subscriber()
+
     # Step 2: Welcome Frame
     welcome = WelcomeFrame(
         heartbeat_s=25,
@@ -308,7 +422,7 @@ async def websocket_gateway(websocket: WebSocket) -> None:
     # Step 3: Discover active conversations and subscribe
     subscribed_convs: set[UUID] = set()
     try:
-        with psycopg.connect(settings.database_url, autocommit=True) as conn:
+        with get_conn() as conn:
             rows = conn.execute(
                 """
                 SELECT cm.conversation_id
@@ -380,7 +494,7 @@ async def websocket_gateway(websocket: WebSocket) -> None:
 
                 # Monotonically update cursors in database
                 try:
-                    with psycopg.connect(settings.database_url, autocommit=True) as conn:
+                    with get_conn() as conn:
                         res = conn.execute(
                             """
                             UPDATE conversation_members

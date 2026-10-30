@@ -21,7 +21,9 @@ def ensure_db(url: str, drop: bool = False) -> None:
     info["dbname"] = "postgres"
     with psycopg.connect(make_conninfo(**info), autocommit=True) as c:
         if drop:
-            c.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
+            c.execute(
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+            )
         if not c.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone():
             c.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
 

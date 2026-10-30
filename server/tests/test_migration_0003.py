@@ -22,8 +22,7 @@ def test_app_login_is_restricted_role(app_conn):
 
 def test_app_login_cannot_modify_audit_log(app_conn):
     app_conn.execute(
-        "INSERT INTO audit_log (tenant_id, action, target) "
-        "VALUES (gen_random_uuid(), 'test', '{}')"
+        "INSERT INTO audit_log (tenant_id, action, target) VALUES (gen_random_uuid(), 'test', '{}')"
     )
     with pytest.raises(InsufficientPrivilege):
         app_conn.execute("UPDATE audit_log SET action = 'changed'")
@@ -40,13 +39,19 @@ def test_new_tables_get_app_grants(conn):
 
 
 def test_indexes_and_checks_exist(conn):
-    idx = {r[0] for r in conn.execute(
-        "SELECT indexname FROM pg_indexes WHERE indexname IN "
-        "('tenant_members_user_id_idx', 'devices_user_id_idx')"
-    )}
+    idx = {
+        r[0]
+        for r in conn.execute(
+            "SELECT indexname FROM pg_indexes WHERE indexname IN "
+            "('tenant_members_user_id_idx', 'devices_user_id_idx')"
+        )
+    }
     assert idx == {"tenant_members_user_id_idx", "devices_user_id_idx"}
-    chk = {r[0] for r in conn.execute(
-        "SELECT conname FROM pg_constraint WHERE conname IN "
-        "('messages_text_has_body', 'messages_media_has_attachment')"
-    )}
+    chk = {
+        r[0]
+        for r in conn.execute(
+            "SELECT conname FROM pg_constraint WHERE conname IN "
+            "('messages_text_has_body', 'messages_media_has_attachment')"
+        )
+    }
     assert chk == {"messages_text_has_body", "messages_media_has_attachment"}

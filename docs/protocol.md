@@ -58,7 +58,7 @@ Send a text or media message to a conversation.
 Field details:
 - `client_msg_id` (UUID, Required): Client-generated UUIDv4 for deduplication.
 - `kind` (string, Required): `"text"` or `"media"`. (`"system"`, `"delete"`, `"edit"` are server-only).
-- `body` (string, Optional): Message content (max 8000 characters). Automatically normalized to Unicode NFC.
+- `body` (string, Optional): Message content (max 8000 characters). Automatically normalized to Unicode NFC. Must not contain NUL (`\x00`) bytes (rejected with 422).
 - `attachment_id` (UUID, Optional): Required when `kind = "media"`. Must reference an attachment in `ready` state owned by sender.
 - `enc_scheme` (integer, Optional): Encryption scheme version (default `0` = plaintext/server-managed).
 
@@ -76,7 +76,7 @@ Field details:
 - `400 Bad Request`: Body exceeds 8000 characters or missing attachment for media.
 - `403 Forbidden`: Sender is not an active member, is blocked, or lacks admin privileges in announcement channel.
 - `404 Not Found`: Conversation does not exist.
-- `422 Unprocessable Entity`: Validation failure on input schema.
+- `422 Unprocessable Entity`: Validation failure on input schema or NUL bytes in body.
 
 ---
 
@@ -180,6 +180,24 @@ Deletes a message by appending a tombstone entry (`kind = "delete"`, `target_seq
 
 ## 4. WebSocket Gateway Protocol (`/v1/ws`)
 
+### 4.0 Frame Schema Standardization & Sign-off (Frozen 19 Oct 2026)
+
+**Sign-off:** BE-1 (Ajay Singh – Messaging & Realtime Lead) & MOB-1 (Mobile & Web Client Lead)  
+**Status:** Formally Signed Off & Frozen (19 Oct 2026)
+
+Early engineering plan drafts (Section 7.3) explored compact frame keys (`t`, `conv`, `delivered`, `read`). On 19 October 2026, the schema was evaluated, agreed upon, and frozen with mutual sign-off from BE-1 and MOB-1:
+
+1. **Standardized Explicit Frame Property Names:**
+   - Full property names (`type`, `conversation_id`, `delivered_seq`, `read_seq`) are used across all WebSocket frames instead of abbreviated tokens (`t`, `conv`, `delivered`, `read`).
+   - Rationale: Ensures 1:1 conceptual alignment with REST payloads (`SendMessageResponse`, `SyncConversationsResponse`), eliminates schema ambiguity across platforms, and avoids custom serialization mapping across Swift (`Codable`), Kotlin (`kotlinx.serialization`), and TypeScript bindings.
+
+2. **Protocol Extensions beyond Plan 7.3 Draft:**
+   - `msg_hint`: Provides deterministic notification for messages $> 4\text{ KB}$ or large media, directing clients to fetch payloads over REST while saving WebSocket bandwidth and preventing head-of-line blocking (Invariant I5).
+   - `subscribe`: Enables dynamic runtime subscriptions to active conversations after initial handshake.
+   - `pong`: Application-level response to client `ping` heartbeats.
+
+---
+
 ### 4.1 Connection Lifecycle
 1. **Ticket Request:** Client obtains a single-use, 30-second ticket via `POST /v1/ws-ticket` (Member 2).
 2. **Connection:** Client establishes a WebSocket connection to `ws(s)://<host>/v1/ws`.
@@ -218,6 +236,15 @@ Broadcast typing activity to conversation members.
   "type": "typing",
   "conversation_id": "c1a2b3c4-d5e6-7f80-91a2-b3c4d5e6f7a8",
   "is_typing": true
+}
+```
+
+#### D. Subscribe (`subscribe`)
+Dynamically subscribe connection to a newly joined conversation.
+```json
+{
+  "type": "subscribe",
+  "conversation_id": "c1a2b3c4-d5e6-7f80-91a2-b3c4d5e6f7a8"
 }
 ```
 
@@ -293,6 +320,13 @@ Sent if Member 2 revokes the session/device, followed by immediate socket termin
   "type": "error",
   "code": "INVALID_FRAME",
   "message": "Malformed JSON payload or unauthenticated ticket"
+}
+```
+
+#### G. Pong Frame (`pong`)
+```json
+{
+  "type": "pong"
 }
 ```
 

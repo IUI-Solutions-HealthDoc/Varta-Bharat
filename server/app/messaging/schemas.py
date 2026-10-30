@@ -205,4 +205,3 @@ class DeleteMessageResponse(BaseModel):
     target_seq: Annotated[int, Field(ge=1, description="Sequence number of the deleted message.")]
     kind: Annotated[Literal["delete"], Field(default="delete", description="Tombstone kind.")]
     created_at: Annotated[datetime, Field(description="Timestamp when deletion was recorded.")]
-

@@ -17,6 +17,8 @@ from uuid import UUID, uuid4
 import psycopg
 from psycopg.pq import TransactionStatus
 
+from app.media.validation import AttachmentRejected, validate_attachment_for_send
+
 log = logging.getLogger("varta.send")
 
 
@@ -37,28 +39,6 @@ class _Duplicate(Exception):
         self.row = row
 
 
-def validate_attachment_for_send(
-    conn: psycopg.Connection,
-    attachment_id: UUID,
-    sender_id: UUID,
-    tenant_id: UUID,
-) -> None:
-    """Member 3 attachment hook: validates that attachment is ready, in same tenant, and owned by sender."""
-    row = conn.execute(
-        "SELECT state, tenant_id, uploader_id FROM attachments WHERE id = %s",
-        (attachment_id,),
-    ).fetchone()
-    if row is None:
-        raise NotAllowed("attachment not found")
-    state, att_tenant, uploader = row
-    if state != "ready":
-        raise NotAllowed("attachment is not ready")
-    if att_tenant != tenant_id:
-        raise NotAllowed("attachment belongs to another tenant")
-    if uploader != sender_id:
-        raise NotAllowed("attachment was uploaded by another user")
-
-
 def publish_hint(
     conversation_id: UUID,
     seq: int,
@@ -70,14 +50,11 @@ def publish_hint(
     attachment_id: UUID | None = None,
 ) -> None:
     """Publish realtime message hint to Valkey channel for WebSocket gateway subscribers."""
+    published_to_valkey = False
     try:
-        from app.config import settings
-        import valkey
+        from app.core.valkey import get_valkey
 
-        url = settings.valkey_url
-        if url.startswith("redis://"):
-            url = "valkey://" + url.removeprefix("redis://")
-        client = valkey.Valkey.from_url(url, decode_responses=True)
+        client = get_valkey()
 
         payload = {
             "conversation_id": str(conversation_id),
@@ -95,25 +72,28 @@ def publish_hint(
 
         channel = f"conv:{conversation_id}"
         client.publish(channel, json.dumps(payload))
+        published_to_valkey = True
     except Exception as exc:  # noqa: BLE001
         # Post-commit Valkey glitch must not fail an already-committed message transaction
         log.warning("publish_hint failed: %s", exc)
 
-    try:
-        from app.ws.router import broadcast_realtime_message
+    # If Valkey publication failed, fallback to local in-process broadcast
+    if not published_to_valkey:
+        try:
+            from app.ws.router import broadcast_realtime_message
 
-        broadcast_realtime_message(
-            conversation_id=conversation_id,
-            seq=seq,
-            message_id=message_id,
-            sender_id=sender_id,
-            kind=kind,
-            created_at=created_at,
-            body=body,
-            attachment_id=attachment_id,
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.debug("broadcast_realtime_message error: %s", exc)
+            broadcast_realtime_message(
+                conversation_id=conversation_id,
+                seq=seq,
+                message_id=message_id,
+                sender_id=sender_id,
+                kind=kind,
+                created_at=created_at,
+                body=body,
+                attachment_id=attachment_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("broadcast_realtime_message fallback error: %s", exc)
 
 
 def enqueue_push(conversation_id: UUID, seq: int) -> None:
@@ -233,7 +213,10 @@ def send_message(
 
             # 3d. Attachment validation
             if attachment_id is not None:
-                attachment_validator(conn, attachment_id, sender_id, tenant_id)
+                try:
+                    attachment_validator(conn, attachment_id, sender_id, tenant_id)
+                except AttachmentRejected as exc:
+                    raise NotAllowed(f"attachment is not ready: {exc.reason}") from exc
 
             # Step 4: Insert the message
             inserted = conn.execute(
@@ -366,4 +349,3 @@ def send_tombstone(
     enqueue_push(conversation_id, msg_seq)
 
     return Sent(seq=msg_seq, id=msg_id, created_at=created_at, duplicate=False)
-

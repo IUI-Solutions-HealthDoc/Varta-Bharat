@@ -6,16 +6,15 @@ Implements:
 - GET /v1/conversations/{conversation_id}/messages
 """
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
-import psycopg
 
 from app.config import settings
+from app.core.db import get_conn
+from app.media.validation import AttachmentRejected
 from app.messaging.schemas import (
     ConversationSyncItem,
     DeleteMessageResponse,
@@ -37,19 +36,6 @@ class AuthUser:
     id: UUID
     tenant_id: UUID
     device_id: UUID
-
-
-@contextmanager
-def get_conn() -> Iterator[psycopg.Connection]:
-    """Yield an autocommit connection (compatible with Member 3 pooled db)."""
-    try:
-        from app.core.db import get_conn as core_get_conn
-
-        with core_get_conn() as conn:
-            yield conn
-    except (ImportError, AttributeError):
-        with psycopg.connect(settings.database_url, autocommit=True) as conn:
-            yield conn
 
 
 def get_current_user(
@@ -110,6 +96,11 @@ def send_message_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Message body exceeds 8000 characters limit.",
         )
+    if payload.body is not None and "\x00" in payload.body:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Message body cannot contain NUL bytes.",
+        )
 
     with get_conn() as conn:
         try:
@@ -122,7 +113,7 @@ def send_message_endpoint(
                 body=payload.body,
                 attachment_id=payload.attachment_id,
             )
-        except NotAllowed as exc:
+        except (NotAllowed, AttachmentRejected) as exc:
             msg = str(exc)
             if "not found" in msg.lower():
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=msg) from exc

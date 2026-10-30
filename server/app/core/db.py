@@ -17,7 +17,9 @@ _pool: ConnectionPool | None = None
 
 def get_pool() -> ConnectionPool:
     global _pool
-    if _pool is None:
+    if _pool is None or _pool.conninfo != settings.database_url:
+        if _pool is not None:
+            _pool.close()
         _pool = ConnectionPool(
             settings.database_url,
             min_size=1,
