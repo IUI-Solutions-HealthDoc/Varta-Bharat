@@ -57,3 +57,23 @@ jobs:
           sudo mv gitleaks /usr/local/bin/
       - name: Scan repository history
         run: gitleaks detect --source . --redact --verbose
+
+  types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Export OpenAPI
+        working-directory: server
+        run: |
+          uv sync
+          uv run python -m scripts.export_openapi ../packages/protocol/openapi.json
+      - run: pnpm generate
+      - name: Fail if generated types are stale
+        run: git diff --exit-code -- packages/protocol
