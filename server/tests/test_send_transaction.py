@@ -109,3 +109,89 @@ def test_body_is_normalised_to_nfc(conn):
                  client_msg_id=uuid.uuid4(), body="e\u0301")  # e + combining acute
     body = conn.execute("SELECT body FROM messages WHERE conversation_id = %s", (s["conv"],)).fetchone()[0]
     assert body == "\u00e9"
+
+
+def test_dm_blocked_sender_or_recipient_rejected(conn):
+    # Create DM conversation between alice and bob
+    s = seed_chat(conn, conv_kind="private")
+    dm_key = f"{s['tenant']}:{s['alice']}:{s['bob']}"
+    dm_id = conn.execute(
+        "INSERT INTO conversations (tenant_id, kind, dm_key, created_by) "
+        "VALUES (%s, 'dm', %s, %s) RETURNING id",
+        (s["tenant"], dm_key, s["alice"]),
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO conversation_members (conversation_id, user_id, role) VALUES (%s, %s, 'member')",
+        (dm_id, s["alice"]),
+    )
+    conn.execute(
+        "INSERT INTO conversation_members (conversation_id, user_id, role) VALUES (%s, %s, 'member')",
+        (dm_id, s["bob"]),
+    )
+    conn.commit()
+
+    # Bob blocks alice
+    conn.execute(
+        "INSERT INTO user_blocks (blocker_id, blocked_id) VALUES (%s, %s)",
+        (s["bob"], s["alice"]),
+    )
+    conn.commit()
+
+    # Alice trying to send to Bob should be blocked without burning a sequence
+    with pytest.raises(NotAllowed, match="blocked"):
+        send_message(conn, conversation_id=dm_id, sender_id=s["alice"],
+                     client_msg_id=uuid.uuid4(), body="hello bob")
+    assert _last_seq(conn, dm_id) == 0
+
+
+def test_client_cannot_send_system_kind(conn):
+    s = seed_chat(conn)
+    with pytest.raises(NotAllowed, match="text.*media"):
+        send_message(conn, conversation_id=s["conv"], sender_id=s["alice"],
+                     client_msg_id=uuid.uuid4(), kind="system", body="system notice")
+    assert _last_seq(conn, s["conv"]) == 0
+
+
+def test_body_length_exceeding_8000_rejected(conn):
+    s = seed_chat(conn)
+    with pytest.raises(ValueError, match="exceeds 8000"):
+        send_message(conn, conversation_id=s["conv"], sender_id=s["alice"],
+                     client_msg_id=uuid.uuid4(), body="a" * 8001)
+    assert _last_seq(conn, s["conv"]) == 0
+
+
+def test_open_transaction_rejected_by_send_message(conn):
+    s = seed_chat(conn)
+    conn.execute("SELECT 1")  # Opens transaction in psycopg autocommit=False connection
+    with pytest.raises(RuntimeError, match="must not be called inside an open transaction"):
+        send_message(conn, conversation_id=s["conv"], sender_id=s["alice"],
+                     client_msg_id=uuid.uuid4(), body="msg")
+    conn.rollback()
+
+
+def test_attachment_validation_checks(conn):
+    s = seed_chat(conn)
+    att_id = conn.execute(
+        "INSERT INTO attachments (tenant_id, uploader_id, object_key, mime, byte_size, state) "
+        "VALUES (%s, %s, 'obj1', 'image/png', 1024, 'pending') RETURNING id",
+        (s["tenant"], s["alice"]),
+    ).fetchone()[0]
+    conn.commit()
+
+    # Pending attachment rejected
+    with pytest.raises(NotAllowed, match="attachment is not ready"):
+        send_message(conn, conversation_id=s["conv"], sender_id=s["alice"],
+                     client_msg_id=uuid.uuid4(), kind="media", attachment_id=att_id)
+
+    # Bob cannot send Alice's attachment
+    conn.execute("UPDATE attachments SET state = 'ready' WHERE id = %s", (att_id,))
+    conn.commit()
+    with pytest.raises(NotAllowed, match="another user"):
+        send_message(conn, conversation_id=s["conv"], sender_id=s["bob"],
+                     client_msg_id=uuid.uuid4(), kind="media", attachment_id=att_id)
+
+    # Alice sending ready attachment succeeds
+    sent = send_message(conn, conversation_id=s["conv"], sender_id=s["alice"],
+                        client_msg_id=uuid.uuid4(), kind="media", attachment_id=att_id)
+    assert sent.seq == 1
+
