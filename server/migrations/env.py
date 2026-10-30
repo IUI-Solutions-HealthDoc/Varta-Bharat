@@ -1,4 +1,4 @@
-﻿from logging.config import fileConfig
+from logging.config import fileConfig
 
 from alembic import context
 from dotenv import find_dotenv, load_dotenv

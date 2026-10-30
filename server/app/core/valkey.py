@@ -1,4 +1,4 @@
-﻿"""Shared Valkey client (OTPs, ws tickets, pub/sub hints)."""
+"""Shared Valkey client (OTPs, ws tickets, pub/sub hints)."""
 
 import valkey
 

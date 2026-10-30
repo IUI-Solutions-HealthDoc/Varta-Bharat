@@ -1,4 +1,4 @@
-﻿"""app login role, default privileges, user_id indexes, message CHECKs
+"""app login role, default privileges, user_id indexes, message CHECKs
 
 Revision ID: 0003
 Revises: 0002

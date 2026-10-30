@@ -1,4 +1,4 @@
-﻿"""Attachment checks used by the send path (called from send_message, inside its transaction)."""
+"""Attachment checks used by the send path (called from send_message, inside its transaction)."""
 
 from uuid import UUID
 
