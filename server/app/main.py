@@ -5,11 +5,15 @@ from fastapi import FastAPI, HTTPException
 
 from app.config import settings
 from app.logging_setup import setup_logging
+from app.messaging import router as messaging_router
+from app.ws import router as ws_router
 
 setup_logging()
 log = logging.getLogger("varta")
 
 app = FastAPI(title="Varta Bharat API", version="0.1.0")
+app.include_router(messaging_router)
+app.include_router(ws_router)
 
 
 @app.get("/health")
