@@ -2,7 +2,10 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+from dotenv import find_dotenv, load_dotenv
 from sqlalchemy import create_engine, pool
+
+load_dotenv(find_dotenv(usecwd=True))
 
 config = context.config
 if config.config_file_name:
@@ -20,7 +23,20 @@ def get_url() -> str:
     if not url:
         raise RuntimeError("Set DATABASE_URL (or ALEMBIC_DATABASE_URL)")
     if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+    if not url.startswith("postgresql+psycopg://"):
+        from psycopg.conninfo import conninfo_to_dict
+        from sqlalchemy import URL
+
+        d = conninfo_to_dict(url)
+        return URL.create(
+            "postgresql+psycopg",
+            username=d.get("user"),
+            password=d.get("password"),
+            host=d.get("host"),
+            port=int(d["port"]) if d.get("port") else None,
+            database=d.get("dbname"),
+        ).render_as_string(hide_password=False)
     return url
 
 

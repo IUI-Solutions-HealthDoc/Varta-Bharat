@@ -2,11 +2,14 @@ import os
 import uuid
 from pathlib import Path
 
+from dotenv import find_dotenv, load_dotenv
 import psycopg
 from alembic import command
 from alembic.config import Config
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+load_dotenv(find_dotenv(usecwd=True))
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_URL = os.environ.get("TEST_DATABASE_URL", "postgresql://varta:varta@localhost:5432/varta_test")
