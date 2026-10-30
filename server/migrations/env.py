@@ -1,10 +1,12 @@
-import os
-from logging.config import fileConfig
+﻿from logging.config import fileConfig
 
 from alembic import context
 from dotenv import find_dotenv, load_dotenv
 from sqlalchemy import create_engine, pool
 
+from app.config import Settings
+
+# Migration 0003 reads APP_DB_PASSWORD / ENVIRONMENT from os.environ, so export .env too.
 load_dotenv(find_dotenv(usecwd=True))
 
 config = context.config
@@ -15,13 +17,10 @@ target_metadata = None  # schema is managed with explicit SQL migrations
 
 
 def get_url() -> str:
-    url = (
-        os.environ.get("ALEMBIC_DATABASE_URL")
-        or os.environ.get("DATABASE_URL")
-        or config.get_main_option("sqlalchemy.url")
-    )
-    if not url:
-        raise RuntimeError("Set DATABASE_URL (or ALEMBIC_DATABASE_URL)")
+    # Fresh Settings() on purpose: tests set ALEMBIC_DATABASE_URL just before each run,
+    # so the module-level singleton in app.config would be stale.
+    s = Settings()
+    url = s.alembic_database_url or s.database_url
     if url.startswith("postgresql://"):
         return url.replace("postgresql://", "postgresql+psycopg://", 1)
     if not url.startswith("postgresql+psycopg://"):
