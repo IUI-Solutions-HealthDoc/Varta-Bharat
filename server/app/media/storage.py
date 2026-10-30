@@ -51,23 +51,6 @@ class Storage:
     def delete(self, key: str) -> None:
         self._client.delete_object(Bucket=settings.s3_bucket, Key=key)
 
-    def get_bytes(self, key: str, limit: int) -> bytes | None:
-        """Object content, or None if missing. Reads at most limit + 1 bytes."""
-        try:
-            body = self._client.get_object(Bucket=settings.s3_bucket, Key=key)["Body"]
-        except ClientError as exc:
-            if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
-                return None
-            raise
-        return body.read(limit + 1)
-
-    def put_bytes(self, key: str, data: bytes, content_type: str) -> None:
-        self._client.put_object(
-            Bucket=settings.s3_bucket, Key=key, Body=data, ContentType=content_type
-        )
-
-    def delete(self, key: str) -> None:
-        self._client.delete_object(Bucket=settings.s3_bucket, Key=key)
     def object_size(self, key: str) -> int | None:
         """Size in bytes of the uploaded object, or None if it does not exist."""
         try:
