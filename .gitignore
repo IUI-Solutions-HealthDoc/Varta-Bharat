@@ -7,3 +7,7 @@ __pycache__/
 *.egg-info/
 node_modules/
 .DS_Store
+.turbo/
+dist/
+.next/
+.expo/
