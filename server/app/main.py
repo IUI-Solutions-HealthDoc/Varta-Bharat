@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 
 from app.config import settings
 from app.logging_setup import setup_logging
+from app.media.router import router as media_router
 from app.messaging import router as messaging_router
 from app.ws import router as ws_router
 
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Varta Bharat API", version="0.1.0", lifespan=lifespan)
 app.include_router(messaging_router)
 app.include_router(ws_router)
+app.include_router(media_router)
 
 
 @app.get("/health")
