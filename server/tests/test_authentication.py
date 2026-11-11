@@ -227,3 +227,47 @@ def test_auth_me_with_revoked_device_returns_401(conn, db_url, monkeypatch):
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Device session is invalid or revoked"
+
+
+def _token_with(**overrides) -> str:
+    now = datetime.now(UTC)
+    payload = {
+        "sub": str(uuid4()),
+        "tenant_id": str(uuid4()),
+        "device_id": str(uuid4()),
+        "jti": str(uuid4()),
+        "iat": now,
+        "exp": now + timedelta(minutes=5),
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+        "token_type": "access",
+    }
+    payload.update(overrides)
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def test_auth_me_with_wrong_audience_returns_401():
+    response = client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {_token_with(aud='other-client')}"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_auth_me_with_wrong_issuer_returns_401():
+    response = client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {_token_with(iss='someone-else')}"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_auth_me_with_refresh_token_type_returns_401():
+    response = client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {_token_with(token_type='refresh')}"},
+    )
+
+    assert response.status_code == 401
