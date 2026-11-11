@@ -59,11 +59,12 @@ jobs:
       - name: Scan repository history
         run: gitleaks detect --source . --redact --verbose
 
+  
   types:
-  runs-on: ubuntu-latest
-  env:
-    JWT_SECRET: ci-only-test-secret-not-for-production
-  steps:
+    runs-on: ubuntu-latest
+    env:
+      JWT_SECRET: ci-only-test-secret-not-for-production
+    steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - uses: pnpm/action-setup@v4
