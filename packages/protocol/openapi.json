@@ -710,27 +710,6 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/auth/me": {
-      "get": {
-        "operationId": "get_current_user_auth_me_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Get Current User"
-      }
-    },
     "/health": {
       "get": {
         "operationId": "health_health_get",
@@ -923,6 +902,27 @@
         "tags": [
           "attachments"
         ]
+      }
+    },
+    "/v1/auth/me": {
+      "get": {
+        "operationId": "get_current_user_v1_auth_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Current User"
       }
     },
     "/v1/blocks": {
