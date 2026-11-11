@@ -363,3 +363,143 @@ def test_get_current_user_works_in_local_environment(monkeypatch):
     custom_uid_2 = uuid4()
     user_header = get_current_user(x_user_id=str(custom_uid_2))
     assert user_header.id == custom_uid_2
+
+
+def test_revoke_device_rejects_unauthenticated_and_other_user(conn, monkeypatch):
+    """POST /v1/devices/{device_id}/revoke requires authentication, device ownership, or admin role."""
+    s = seed_chat(conn)
+    alice_id = s["alice"]
+    bob_id = s["bob"]
+    tenant_id = s["tenant"]
+
+    alice_device = uuid4()
+    # Insert Alice's device into devices table
+    conn.execute(
+        "INSERT INTO devices (id, user_id, platform, push_token, refresh_hash, refresh_family) VALUES (%s, %s, %s, %s, %s, %s)",
+        (alice_device, alice_id, "android", "push_token_alice", b"hash_alice", uuid4()),
+    )
+    conn.commit()
+
+    # 1. Unauthenticated in production environment is rejected with 401
+    monkeypatch.setattr(settings, "environment", "production")
+    r_unauth = client.post(f"/v1/devices/{alice_device}/revoke")
+    assert r_unauth.status_code == 401
+
+    # Restore local environment
+    monkeypatch.setattr(settings, "environment", "local")
+
+    # 2. Bob (non-owner, member role) attempts to revoke Alice's device -> 403 Forbidden
+    headers_bob = {
+        "Authorization": f"Bearer {bob_id}",
+        "X-Tenant-Id": str(tenant_id),
+    }
+    r_bob = client.post(f"/v1/devices/{alice_device}/revoke", headers=headers_bob)
+    assert r_bob.status_code == 403
+    assert "Not authorized" in r_bob.json()["detail"]
+
+    # 3. Alice (device owner) revokes her own device -> 200 OK
+    headers_alice = {
+        "Authorization": f"Bearer {alice_id}",
+        "X-Tenant-Id": str(tenant_id),
+    }
+    r_alice = client.post(f"/v1/devices/{alice_device}/revoke", headers=headers_alice)
+    assert r_alice.status_code == 200
+    assert r_alice.json()["revoked"] is True
+
+
+def test_live_socket_drops_unsubscribed_when_user_leaves_conversation(conn):
+    """Connected WebSocket stops receiving live frames after user leaves conversation (Invariant I4)."""
+    s = seed_chat(conn)
+    conv_id = s["conv"]
+    alice_id = s["alice"]
+    bob_id = s["bob"]
+    ticket_bob = f"test:{bob_id}:{s['tenant']}"
+    headers_alice = {"Authorization": f"Bearer {alice_id}"}
+
+    with client.websocket_connect("/v1/ws") as ws_bob:
+        ws_bob.send_json({"type": "hello", "ticket": ticket_bob})
+        assert ws_bob.receive_json()["type"] == "welcome"
+
+        # Alice sends message 1 while Bob is an active member
+        r1 = client.post(
+            f"/v1/conversations/{conv_id}/messages",
+            json={"client_msg_id": str(uuid4()), "kind": "text", "body": "Live message 1"},
+            headers=headers_alice,
+        )
+        assert r1.status_code == 201
+        m1 = ws_bob.receive_json()
+        assert m1["type"] == "msg"
+        assert m1["body"] == "Live message 1"
+
+        # Bob leaves the conversation
+        conn.execute(
+            "UPDATE conversation_members SET left_at = now() WHERE conversation_id = %s AND user_id = %s",
+            (conv_id, bob_id),
+        )
+        conn.commit()
+
+        # Alice sends message 2
+        r2 = client.post(
+            f"/v1/conversations/{conv_id}/messages",
+            json={
+                "client_msg_id": str(uuid4()),
+                "kind": "text",
+                "body": "Live message 2 after leave",
+            },
+            headers=headers_alice,
+        )
+        assert r2.status_code == 201
+
+        # Bob should NOT receive message 2. Socket is still responsive (ping/pong works).
+        ws_bob.send_json({"type": "ping"})
+        pong = ws_bob.receive_json()
+        assert pong == {"type": "pong"}
+
+
+def test_sync_and_get_messages_rejects_removed_tenant_member_and_inactive_user(conn):
+    """GET /messages and GET /sync/conversations reject removed tenant members and inactive users."""
+    s = seed_chat(conn)
+    conv_id = s["conv"]
+    bob_id = s["bob"]
+    tenant_id = s["tenant"]
+    headers_bob = {"Authorization": f"Bearer {bob_id}"}
+
+    # 1. Bob removed from tenant
+    conn.execute(
+        "UPDATE tenant_members SET removed_at = now() WHERE tenant_id = %s AND user_id = %s",
+        (tenant_id, bob_id),
+    )
+    conn.commit()
+
+    # GET /messages returns 403
+    r_msg = client.get(f"/v1/conversations/{conv_id}/messages", headers=headers_bob)
+    assert r_msg.status_code == 403
+    assert "removed from the tenant" in r_msg.json()["detail"]
+
+    # GET /sync/conversations excludes conv_id
+    r_sync = client.get("/v1/sync/conversations", headers=headers_bob)
+    assert r_sync.status_code == 200
+    conv_ids = [c["conversation_id"] for c in r_sync.json()["conversations"]]
+    assert str(conv_id) not in conv_ids
+
+    # 2. Reset removed_at, but mark Bob's user status as suspended
+    conn.execute(
+        "UPDATE tenant_members SET removed_at = NULL WHERE tenant_id = %s AND user_id = %s",
+        (tenant_id, bob_id),
+    )
+    conn.execute(
+        "UPDATE users SET status = 'suspended' WHERE id = %s",
+        (bob_id,),
+    )
+    conn.commit()
+
+    # GET /messages returns 403
+    r_msg_susp = client.get(f"/v1/conversations/{conv_id}/messages", headers=headers_bob)
+    assert r_msg_susp.status_code == 403
+    assert "not active" in r_msg_susp.json()["detail"]
+
+    # GET /sync/conversations excludes conv_id
+    r_sync_susp = client.get("/v1/sync/conversations", headers=headers_bob)
+    assert r_sync_susp.status_code == 200
+    conv_ids_susp = [c["conversation_id"] for c in r_sync_susp.json()["conversations"]]
+    assert str(conv_id) not in conv_ids_susp

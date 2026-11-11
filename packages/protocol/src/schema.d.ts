@@ -72,6 +72,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/conversations/{conversation_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List messages in conversation
+         * @description Returns messages in seq order after a given sequence number for catch-up.
+         */
+        get: operations["get_messages_endpoint_v1_conversations__conversation_id__messages_get"];
+        put?: never;
+        /**
+         * Send a message to a conversation
+         * @description Sends a text or media message to a conversation. Submitting the same client_msg_id will return the existing message idempotently.
+         */
+        post: operations["send_message_endpoint_v1_conversations__conversation_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/conversations/{conversation_id}/messages/{target_seq}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a message (tombstone)
+         * @description Appends a tombstone message deletion (kind='delete', target_seq=target_seq). The message row is never deleted from the database (Invariant I6). Only the original message sender or a conversation admin may delete a message.
+         */
+        delete: operations["delete_message_endpoint_v1_conversations__conversation_id__messages__target_seq__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/devices/{device_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke device session (Member 2 hook / P2)
+         * @description Pushes a 'revoked' frame to the active device WebSocket connection and terminates it.
+         */
+        post: operations["revoke_device_endpoint_v1_devices__device_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sync/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sync active conversations
+         * @description Returns all active conversation memberships and sync cursors for the authenticated user.
+         */
+        get: operations["sync_conversations_endpoint_v1_sync_conversations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ws-ticket": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue WebSocket ticket (Plan D-5)
+         * @description Issues a single-use ticket stored in Valkey with a 30s TTL for WebSocket authentication.
+         */
+        post: operations["create_ws_ticket_endpoint_v1_ws_ticket_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -86,6 +190,45 @@ export interface components {
             /** State */
             state: string;
         };
+        /**
+         * ConversationSyncItem
+         * @description Per-conversation synchronization status and cursors for an active member.
+         * @example {
+         *       "conversation_id": "c1a2b3c4-d5e6-7f80-91a2-b3c4d5e6f7a8",
+         *       "delivered_seq": 148,
+         *       "last_seq": 150,
+         *       "read_seq": 140,
+         *       "visible_from_seq": 1
+         *     }
+         */
+        ConversationSyncItem: {
+            /**
+             * Conversation Id
+             * Format: uuid
+             * @description Unique ID of the conversation.
+             */
+            conversation_id: string;
+            /**
+             * Delivered Seq
+             * @description Last sequence confirmed delivered.
+             */
+            delivered_seq: number;
+            /**
+             * Last Seq
+             * @description Highest committed sequence in the chat.
+             */
+            last_seq: number;
+            /**
+             * Read Seq
+             * @description Last sequence marked as read by user.
+             */
+            read_seq: number;
+            /**
+             * Visible From Seq
+             * @description Earliest sequence this user has permission to read.
+             */
+            visible_from_seq: number;
+        };
         /** CreateAttachment */
         CreateAttachment: {
             /** Byte Size */
@@ -93,10 +236,239 @@ export interface components {
             /** Mime */
             mime: string;
         };
+        /**
+         * DeleteMessageResponse
+         * @description Response returned upon successfully creating a tombstone message deletion (P2).
+         * @example {
+         *       "created_at": "2026-10-30T10:20:00.000000Z",
+         *       "id": "0192df78-8bc4-7123-93df-520e5e4860f5",
+         *       "kind": "delete",
+         *       "seq": 155,
+         *       "target_seq": 150
+         *     }
+         */
+        DeleteMessageResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             * @description Timestamp when deletion was recorded.
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             * @description UUIDv7 of the tombstone message.
+             */
+            id: string;
+            /**
+             * Kind
+             * @description Tombstone kind.
+             * @default delete
+             * @constant
+             */
+            kind: "delete";
+            /**
+             * Seq
+             * @description Sequence number of the tombstone entry.
+             */
+            seq: number;
+            /**
+             * Target Seq
+             * @description Sequence number of the deleted message.
+             */
+            target_seq: number;
+        };
+        /**
+         * GetMessagesResponse
+         * @description Paginated messages response for catch-up and conversation viewing.
+         */
+        GetMessagesResponse: {
+            /**
+             * Has More
+             * @description True if there are additional newer messages to fetch.
+             */
+            has_more: boolean;
+            /**
+             * Last Seq
+             * @description Highest sequence returned in this batch.
+             */
+            last_seq: number;
+            /**
+             * Messages
+             * @description List of messages in order of seq.
+             */
+            messages: components["schemas"]["MessageItem"][];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * MessageItem
+         * @description A single stored message in a conversation.
+         * @example {
+         *       "body": "All services healthy on Postgres 18 and Valkey.",
+         *       "client_msg_id": "b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e",
+         *       "conversation_id": "c1a2b3c4-d5e6-7f80-91a2-b3c4d5e6f7a8",
+         *       "created_at": "2026-10-30T10:15:30.123456Z",
+         *       "enc_scheme": 0,
+         *       "id": "0192df78-8bc4-7123-93df-520e5e4860b0",
+         *       "kind": "text",
+         *       "sender_id": "f4d5e6f7-a8b9-8091-a2b3-c4d5e6f7a8d1",
+         *       "seq": 150
+         *     }
+         */
+        MessageItem: {
+            /**
+             * Attachment Id
+             * @description Associated media attachment ID if any.
+             */
+            attachment_id?: string | null;
+            /**
+             * Body
+             * @description Message body text.
+             */
+            body?: string | null;
+            /**
+             * Client Msg Id
+             * Format: uuid
+             * @description Client-provided idempotency ID.
+             */
+            client_msg_id: string;
+            /**
+             * Conversation Id
+             * Format: uuid
+             * @description ID of the conversation.
+             */
+            conversation_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             * @description Message creation timestamp.
+             */
+            created_at: string;
+            /**
+             * Enc Scheme
+             * @description Encryption scheme.
+             * @default 0
+             */
+            enc_scheme: number;
+            /**
+             * Id
+             * Format: uuid
+             * @description Message UUIDv7.
+             */
+            id: string;
+            /**
+             * Kind
+             * @description Kind of message.
+             * @enum {string}
+             */
+            kind: "text" | "media" | "system" | "delete" | "edit";
+            /**
+             * Sender Id
+             * Format: uuid
+             * @description User ID of the sender.
+             */
+            sender_id: string;
+            /**
+             * Seq
+             * @description Message sequence number in this chat.
+             */
+            seq: number;
+            /**
+             * Target Seq
+             * @description Target sequence if kind is 'delete' or 'edit'.
+             */
+            target_seq?: number | null;
+        };
+        /**
+         * SendMessageRequest
+         * @description Payload for submitting a message to a conversation.
+         * @example {
+         *       "body": "Namaste Bharat! This is our first message.",
+         *       "client_msg_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+         *       "enc_scheme": 0,
+         *       "kind": "text"
+         *     }
+         */
+        SendMessageRequest: {
+            /**
+             * Attachment Id
+             * @description ID of a pre-uploaded attachment in ready state. Required for media.
+             */
+            attachment_id?: string | null;
+            /**
+             * Body
+             * @description Message body text (max 8000 characters). Normalized to NFC.
+             */
+            body?: string | null;
+            /**
+             * Client Msg Id
+             * Format: uuid
+             * @description Client-generated unique ID for idempotent deduplication.
+             */
+            client_msg_id: string;
+            /**
+             * Enc Scheme
+             * @description Encryption scheme identifier (0 = plaintext / server-managed).
+             * @default 0
+             */
+            enc_scheme: number;
+            /**
+             * Kind
+             * @description Message kind. Clients may only submit 'text' or 'media'.
+             * @default text
+             * @enum {string}
+             */
+            kind: "text" | "media";
+        };
+        /**
+         * SendMessageResponse
+         * @description Response returned upon successful message submission or idempotent retry.
+         * @example {
+         *       "created_at": "2026-10-30T10:15:30.123456Z",
+         *       "duplicate": false,
+         *       "id": "0192df78-8bc4-7123-93df-520e5e4860b0",
+         *       "seq": 42
+         *     }
+         */
+        SendMessageResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             * @description Timestamp when message was stored.
+             */
+            created_at: string;
+            /**
+             * Duplicate
+             * @description True if this send was an idempotent retry of an existing message.
+             * @default false
+             */
+            duplicate: boolean;
+            /**
+             * Id
+             * Format: uuid
+             * @description Server-assigned UUIDv7 of the message.
+             */
+            id: string;
+            /**
+             * Seq
+             * @description Strictly gapless monotonic sequence number.
+             */
+            seq: number;
+        };
+        /**
+         * SyncConversationsResponse
+         * @description List of all active conversation memberships and cursors for catch-up sync.
+         */
+        SyncConversationsResponse: {
+            /**
+             * Conversations
+             * @description List of active conversation synchronization states.
+             */
+            conversations: components["schemas"]["ConversationSyncItem"][];
         };
         /** UploadTicket */
         UploadTicket: {
@@ -126,6 +498,27 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /**
+         * WsTicketResponse
+         * @description Response returned by POST /v1/ws-ticket.
+         * @example {
+         *       "expires_in": 30,
+         *       "ticket": "wstk_8f91a2c3d4e5f67890abcdef"
+         *     }
+         */
+        WsTicketResponse: {
+            /**
+             * Expires In
+             * @description Ticket expiration time in seconds.
+             * @default 30
+             */
+            expires_in: number;
+            /**
+             * Ticket
+             * @description Single-use, 30s ticket for WebSocket authentication.
+             */
+            ticket: string;
         };
     };
     responses: never;
@@ -237,6 +630,234 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AttachmentOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_messages_endpoint_v1_conversations__conversation_id__messages_get: {
+        parameters: {
+            query?: {
+                /** @description Retrieve messages strictly after this seq */
+                after?: number;
+                /** @description Maximum messages to return */
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+                "x-user-id"?: string | null;
+                "x-tenant-id"?: string | null;
+                "x-device-id"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GetMessagesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_message_endpoint_v1_conversations__conversation_id__messages_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-user-id"?: string | null;
+                "x-tenant-id"?: string | null;
+                "x-device-id"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SendMessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_message_endpoint_v1_conversations__conversation_id__messages__target_seq__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-idempotency-key"?: string | null;
+                authorization?: string | null;
+                "x-user-id"?: string | null;
+                "x-tenant-id"?: string | null;
+                "x-device-id"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+                /** @description Sequence number of message to delete */
+                target_seq: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteMessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_device_endpoint_v1_devices__device_id__revoke_post: {
+        parameters: {
+            query?: {
+                reason?: string;
+            };
+            header?: {
+                authorization?: string | null;
+                "x-user-id"?: string | null;
+                "x-tenant-id"?: string | null;
+                "x-device-id"?: string | null;
+            };
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_conversations_endpoint_v1_sync_conversations_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-user-id"?: string | null;
+                "x-tenant-id"?: string | null;
+                "x-device-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncConversationsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_ws_ticket_endpoint_v1_ws_ticket_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-user-id"?: string | null;
+                "x-tenant-id"?: string | null;
+                "x-device-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WsTicketResponse"];
                 };
             };
             /** @description Validation Error */

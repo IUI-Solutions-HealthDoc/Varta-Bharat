@@ -148,7 +148,12 @@ def sync_conversations_endpoint(
             SELECT cm.conversation_id, c.last_seq, cm.delivered_seq, cm.read_seq, cm.visible_from_seq
             FROM conversation_members cm
             JOIN conversations c ON c.id = cm.conversation_id
-            WHERE cm.user_id = %s AND cm.left_at IS NULL
+            JOIN tenant_members tm ON tm.tenant_id = c.tenant_id AND tm.user_id = cm.user_id
+            JOIN users u ON u.id = cm.user_id
+            WHERE cm.user_id = %s
+              AND cm.left_at IS NULL
+              AND tm.removed_at IS NULL
+              AND u.status = 'active'
             ORDER BY c.created_at DESC
             """,
             (user.id,),
@@ -180,14 +185,19 @@ def get_messages_endpoint(
     after: Annotated[int, Query(ge=0, description="Retrieve messages strictly after this seq")] = 0,
     limit: Annotated[int, Query(ge=1, le=200, description="Maximum messages to return")] = 50,
 ) -> GetMessagesResponse:
-    """Fetch paginated messages respecting Invariant I4 (visibility and left conversations)."""
+    """Fetch paginated messages respecting Invariant I4 (visibility and left/inactive conversations)."""
     user_id = user.id
 
     with get_conn() as conn:
-        # Check membership and left_at
         member = conn.execute(
-            "SELECT visible_from_seq, left_at FROM conversation_members "
-            "WHERE conversation_id = %s AND user_id = %s",
+            """
+            SELECT cm.visible_from_seq, cm.left_at, tm.removed_at, u.status
+            FROM conversation_members cm
+            JOIN conversations c ON c.id = cm.conversation_id
+            LEFT JOIN tenant_members tm ON tm.tenant_id = c.tenant_id AND tm.user_id = cm.user_id
+            LEFT JOIN users u ON u.id = cm.user_id
+            WHERE cm.conversation_id = %s AND cm.user_id = %s
+            """,
             (conversation_id, user_id),
         ).fetchone()
 
@@ -205,11 +215,21 @@ def get_messages_endpoint(
                 detail="Not a member of this conversation",
             )
 
-        visible_from_seq, left_at = member
+        visible_from_seq, left_at, removed_at, user_status = member
         if left_at is not None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User has left this conversation (Invariant I4)",
+            )
+        if removed_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User has been removed from the tenant (Invariant I4)",
+            )
+        if user_status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User account is not active (Invariant I4)",
             )
 
         # Invariant I4: never return seq < visible_from_seq

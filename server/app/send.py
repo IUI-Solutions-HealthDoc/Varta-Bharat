@@ -50,7 +50,6 @@ def publish_hint(
     attachment_id: UUID | None = None,
 ) -> None:
     """Publish realtime message hint to Valkey channel for WebSocket gateway subscribers."""
-    published_to_valkey = False
     try:
         from app.core.valkey import get_valkey
 
@@ -72,28 +71,10 @@ def publish_hint(
 
         channel = f"conv:{conversation_id}"
         client.publish(channel, json.dumps(payload))
-        published_to_valkey = True
     except Exception as exc:  # noqa: BLE001
         # Post-commit Valkey glitch must not fail an already-committed message transaction
+        # Offline or disconnected clients will catch up via sync endpoints
         log.warning("publish_hint failed: %s", exc)
-
-    # If Valkey publication failed, fallback to local in-process broadcast
-    if not published_to_valkey:
-        try:
-            from app.ws.router import broadcast_realtime_message
-
-            broadcast_realtime_message(
-                conversation_id=conversation_id,
-                seq=seq,
-                message_id=message_id,
-                sender_id=sender_id,
-                kind=kind,
-                created_at=created_at,
-                body=body,
-                attachment_id=attachment_id,
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.debug("broadcast_realtime_message fallback error: %s", exc)
 
 
 def enqueue_push(conversation_id: UUID, seq: int) -> None:

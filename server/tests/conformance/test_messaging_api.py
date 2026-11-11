@@ -413,10 +413,16 @@ def test_ws_device_revocation(conn):
         assert welcome["type"] == "welcome"
         assert welcome["device_id"] == str(device_id)
 
-        # Trigger device revocation via endpoint
+        # Trigger device revocation via endpoint with Alice's auth
+        headers_alice = {
+            "Authorization": f"Bearer {s['alice']}",
+            "X-Tenant-Id": str(s["tenant"]),
+            "X-Device-Id": str(device_id),
+        }
         rev_resp = client.post(
             f"/v1/devices/{device_id}/revoke",
             params={"reason": "Device lost or stolen"},
+            headers=headers_alice,
         )
         assert rev_resp.status_code == 200
         assert rev_resp.json()["revoked"] is True
@@ -476,3 +482,75 @@ def test_valkey_channel_fanout_delivers_to_websocket(conn):
         assert ws_msg["conversation_id"] == str(conv_id)
         assert ws_msg["seq"] == 42
         assert ws_msg["body"] == "Multi-instance fan-out via Valkey!"
+
+
+def test_valkey_channel_fanout_receipt_and_typing_and_revocation(conn):
+    """Verifies that publishing typing, receipt, and revoked frames to Valkey fans out across instances."""
+    import json
+    from app.core.valkey import get_valkey
+
+    s = seed_chat(conn)
+    conv_id = s["conv"]
+    bob_device = uuid4()
+    bob_ticket = f"test:{s['bob']}:{s['tenant']}:{bob_device}"
+
+    with client.websocket_connect("/v1/ws") as ws_bob:
+        ws_bob.send_json({"type": "hello", "ticket": bob_ticket})
+        welcome = ws_bob.receive_json()
+        assert welcome["type"] == "welcome"
+        assert welcome["device_id"] == str(bob_device)
+
+        valkey_client = get_valkey()
+
+        # 1. Valkey fan-out of typing frame
+        valkey_client.publish(
+            f"conv:{conv_id}",
+            json.dumps(
+                {
+                    "type": "typing",
+                    "conversation_id": str(conv_id),
+                    "user_id": str(s["alice"]),
+                    "device_id": str(uuid4()),
+                    "is_typing": True,
+                }
+            ),
+        )
+        typing_frame = ws_bob.receive_json()
+        assert typing_frame["type"] == "typing"
+        assert typing_frame["conversation_id"] == str(conv_id)
+        assert typing_frame["user_id"] == str(s["alice"])
+        assert typing_frame["is_typing"] is True
+
+        # 2. Valkey fan-out of receipt frame
+        valkey_client.publish(
+            f"conv:{conv_id}",
+            json.dumps(
+                {
+                    "type": "receipt",
+                    "conversation_id": str(conv_id),
+                    "user_id": str(s["alice"]),
+                    "delivered_seq": 10,
+                    "read_seq": 8,
+                }
+            ),
+        )
+        receipt_frame = ws_bob.receive_json()
+        assert receipt_frame["type"] == "receipt"
+        assert receipt_frame["conversation_id"] == str(conv_id)
+        assert receipt_frame["delivered_seq"] == 10
+        assert receipt_frame["read_seq"] == 8
+
+        # 3. Valkey fan-out of revoked frame on device channel
+        valkey_client.publish(
+            f"device:{bob_device}",
+            json.dumps(
+                {
+                    "type": "revoked",
+                    "device_id": str(bob_device),
+                    "reason": "Security token rotation",
+                }
+            ),
+        )
+        revoked_frame = ws_bob.receive_json()
+        assert revoked_frame["type"] == "revoked"
+        assert revoked_frame["reason"] == "Security token rotation"

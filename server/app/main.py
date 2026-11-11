@@ -7,8 +7,12 @@ from fastapi import FastAPI, HTTPException
 from app.config import settings
 from app.logging_setup import setup_logging
 from app.media.router import router as media_router
-from app.messaging import router as messaging_router
-from app.ws import router as ws_router
+from app.messaging.router import router as messaging_router
+from app.ws.router import (
+    ensure_valkey_subscriber,
+    router as ws_router,
+    stop_valkey_subscriber,
+)
 
 setup_logging()
 log = logging.getLogger("varta")
@@ -22,13 +26,13 @@ async def lifespan(app: FastAPI):
             "Real auth (BE-2) is required outside ENVIRONMENT=local."
         )
     try:
-        await ws_router.ensure_valkey_subscriber()
+        await ensure_valkey_subscriber()
     except Exception as exc:  # noqa: BLE001
         log.warning("Could not start Valkey subscriber at lifespan startup: %s", exc)
     try:
         yield
     finally:
-        await ws_router.stop_valkey_subscriber()
+        await stop_valkey_subscriber()
 
 
 app = FastAPI(title="Varta Bharat API", version="0.1.0", lifespan=lifespan)
