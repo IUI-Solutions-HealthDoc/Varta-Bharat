@@ -89,7 +89,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/conversations": {
     "/v1/blocks": {
         parameters: {
             query?: never;
@@ -120,6 +119,23 @@ export interface paths {
         post?: never;
         /** Unblock User */
         delete: operations["unblock_user_v1_blocks__user_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Conversation Endpoint */
+        post: operations["create_conversation_endpoint_v1_conversations_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -235,8 +251,6 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Conversation Endpoint */
-        post: operations["create_conversation_endpoint_v1_conversations_post"];
         /**
          * Issue WebSocket ticket (Plan D-5)
          * @description Issues a single-use ticket stored in Valkey with a 30s TTL for WebSocket authentication.
@@ -261,6 +275,24 @@ export interface components {
             id: string;
             /** State */
             state: string;
+        };
+        /** BlockRequest */
+        BlockRequest: {
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
+        /** BlockedUser */
+        BlockedUser: {
+            /** Display Name */
+            display_name: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
         };
         /** ConversationCreate */
         ConversationCreate: {
@@ -300,23 +332,6 @@ export interface components {
             tenant_id: string;
             /** Title */
             title: string | null;
-        /** BlockRequest */
-        BlockRequest: {
-            /**
-             * User Id
-             * Format: uuid
-             */
-            user_id: string;
-        };
-        /** BlockedUser */
-        BlockedUser: {
-            /** Display Name */
-            display_name: string;
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
         };
         /**
          * ConversationSyncItem
@@ -813,16 +828,6 @@ export interface operations {
             };
         };
     };
-    create_conversation_endpoint_v1_conversations_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConversationCreate"];
     list_blocks_v1_blocks_get: {
         parameters: {
             query?: never;
@@ -921,6 +926,39 @@ export interface operations {
             };
         };
     };
+    create_conversation_endpoint_v1_conversations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_messages_endpoint_v1_conversations__conversation_id__messages_get: {
         parameters: {
             query?: {
@@ -988,7 +1026,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ConversationOut"];
                     "application/json": components["schemas"]["SendMessageResponse"];
                 };
             };

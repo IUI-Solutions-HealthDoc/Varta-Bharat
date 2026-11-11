@@ -20,6 +20,39 @@
         "title": "AttachmentOut",
         "type": "object"
       },
+      "BlockRequest": {
+        "properties": {
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "title": "BlockRequest",
+        "type": "object"
+      },
+      "BlockedUser": {
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "title": "BlockedUser",
+        "type": "object"
+      },
       "ConversationCreate": {
         "properties": {
           "community_id": {
@@ -72,24 +105,6 @@
           "created_by": {
             "format": "uuid",
             "title": "Created By",
-      "BlockRequest": {
-        "properties": {
-          "user_id": {
-            "format": "uuid",
-            "title": "User Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "user_id"
-        ],
-        "title": "BlockRequest",
-        "type": "object"
-      },
-      "BlockedUser": {
-        "properties": {
-          "display_name": {
-            "title": "Display Name",
             "type": "string"
           },
           "id": {
@@ -127,13 +142,6 @@
           "created_at"
         ],
         "title": "ConversationOut",
-          }
-        },
-        "required": [
-          "id",
-          "display_name"
-        ],
-        "title": "BlockedUser",
         "type": "object"
       },
       "ConversationSyncItem": {
@@ -917,9 +925,6 @@
         ]
       }
     },
-    "/v1/conversations": {
-      "post": {
-        "operationId": "create_conversation_endpoint_v1_conversations_post",
     "/v1/blocks": {
       "get": {
         "operationId": "list_blocks_v1_blocks_get",
@@ -1032,7 +1037,6 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ConversationCreate"
                 "$ref": "#/components/schemas/BlockRequest"
               }
             }
@@ -1127,6 +1131,52 @@
         "summary": "Unblock User",
         "tags": [
           "moderation"
+        ]
+      }
+    },
+    "/v1/conversations": {
+      "post": {
+        "operationId": "create_conversation_endpoint_v1_conversations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Conversation Endpoint",
+        "tags": [
+          "conversations"
         ]
       }
     },
@@ -1358,7 +1408,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ConversationOut"
                   "$ref": "#/components/schemas/SendMessageResponse"
                 }
               }
@@ -1376,14 +1425,6 @@
             "description": "Validation Error"
           }
         },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Conversation Endpoint",
-        "tags": [
-          "conversations"
         "summary": "Send a message to a conversation",
         "tags": [
           "messaging"
