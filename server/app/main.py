@@ -6,8 +6,9 @@ from fastapi import FastAPI, HTTPException, Depends
 from app.config import settings
 from app.logging_setup import setup_logging
 from app.media.router import router as media_router
+from app.conversations.router import router as conversations_router
+from typing import Annotated
 
-from uuid import UUID
 
 from app.auth.dependencies import AuthUser, current_user
 
@@ -16,6 +17,8 @@ log = logging.getLogger("varta")
 
 app = FastAPI(title="Varta Bharat API", version="0.1.0")
 app.include_router(media_router)
+app.include_router(media_router)
+app.include_router(conversations_router)
 
 
 @app.get("/health")
@@ -35,9 +38,12 @@ def ready() -> dict:
 
 
 @app.get("/auth/me")
-def get_current_user(user: AuthUser = Depends(current_user)):
+def get_current_user(
+    user: Annotated[AuthUser, Depends(current_user)],
+):
     return {
         "user_id": str(user.id),
         "tenant_id": str(user.tenant_id),
         "device_id": str(user.device_id),
     }
+

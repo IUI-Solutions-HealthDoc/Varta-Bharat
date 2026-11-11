@@ -1,5 +1,5 @@
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from uuid import uuid4
 
 import jwt
@@ -17,7 +17,7 @@ def create_access_token(
     Create a signed JWT access token for an authenticated user.
     """
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     payload = {
         "sub": user_id,
