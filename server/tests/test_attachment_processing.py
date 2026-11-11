@@ -62,7 +62,9 @@ def test_valid_png_becomes_ready_with_thumbnail(conn):
 
 def test_pdf_becomes_ready_without_thumbnail(conn):
     chat, storage = seed_chat(conn), FakeStorage()
-    att, key = make(conn, chat, storage, b"%PDF-1.4\n%test\n1 0 obj\n<<>>\nendobj\n", "application/pdf")
+    att, key = make(
+        conn, chat, storage, b"%PDF-1.4\n%test\n1 0 obj\n<<>>\nendobj\n", "application/pdf"
+    )
     assert process_attachment(conn, storage, att) == "ready"
     assert f"{key}.thumb" not in storage.objects
 

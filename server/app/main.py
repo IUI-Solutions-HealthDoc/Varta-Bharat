@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import logging
 
 import psycopg
@@ -11,14 +12,42 @@ from typing import Annotated
 
 
 from app.auth.dependencies import AuthUser, current_user
+from app.messaging.router import router as messaging_router
+from app.moderation.router import router as moderation_router
+from app.ws.router import (
+    ensure_valkey_subscriber,
+    router as ws_router,
+    stop_valkey_subscriber,
+)
 
 setup_logging()
 log = logging.getLogger("varta")
 
-app = FastAPI(title="Varta Bharat API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.environment != "local":
+        raise RuntimeError(
+            f"Refusing to start with dev authentication stub in environment '{settings.environment}'. "
+            "Real auth (BE-2) is required outside ENVIRONMENT=local."
+        )
+    try:
+        await ensure_valkey_subscriber()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not start Valkey subscriber at lifespan startup: %s", exc)
+    try:
+        yield
+    finally:
+        await stop_valkey_subscriber()
+
+
+app = FastAPI(title="Varta Bharat API", version="0.1.0", lifespan=lifespan)
+app.include_router(messaging_router)
+app.include_router(ws_router)
 app.include_router(media_router)
 app.include_router(media_router)
 app.include_router(conversations_router)
+app.include_router(moderation_router)
 
 
 @app.get("/health")

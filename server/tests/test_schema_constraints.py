@@ -34,10 +34,7 @@ def test_non_dm_cannot_have_dm_key(conn):
 
 def test_one_dm_per_pair(conn):
     s = seed_chat(conn)
-    q = (
-        "INSERT INTO conversations (tenant_id, kind, dm_key, created_by) "
-        "VALUES (%s, 'dm', %s, %s)"
-    )
+    q = "INSERT INTO conversations (tenant_id, kind, dm_key, created_by) VALUES (%s, 'dm', %s, %s)"
     key = f"{s['tenant']}:{s['alice']}:{s['bob']}"
     conn.execute(q, (s["tenant"], key, s["alice"]))
     with pytest.raises(psycopg.errors.UniqueViolation):
@@ -106,7 +103,9 @@ def test_app_role_cannot_modify_audit_log(conn):
     conn.commit()
     conn.execute("SET ROLE varta_app")
     assert conn.execute("SELECT count(*) FROM audit_log").fetchone()[0] == 1
-    conn.execute("INSERT INTO audit_log (tenant_id, action, target) VALUES (%s, 't2', '{}')", (s["tenant"],))
+    conn.execute(
+        "INSERT INTO audit_log (tenant_id, action, target) VALUES (%s, 't2', '{}')", (s["tenant"],)
+    )
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         conn.execute("UPDATE audit_log SET action = 'tampered'")
     conn.rollback()

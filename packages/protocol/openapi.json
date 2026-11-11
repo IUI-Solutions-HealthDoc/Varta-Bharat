@@ -72,6 +72,24 @@
           "created_by": {
             "format": "uuid",
             "title": "Created By",
+      "BlockRequest": {
+        "properties": {
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "title": "BlockRequest",
+        "type": "object"
+      },
+      "BlockedUser": {
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
             "type": "string"
           },
           "id": {
@@ -109,6 +127,64 @@
           "created_at"
         ],
         "title": "ConversationOut",
+          }
+        },
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "title": "BlockedUser",
+        "type": "object"
+      },
+      "ConversationSyncItem": {
+        "description": "Per-conversation synchronization status and cursors for an active member.",
+        "example": {
+          "conversation_id": "c1a2b3c4-d5e6-7f80-91a2-b3c4d5e6f7a8",
+          "delivered_seq": 148,
+          "last_seq": 150,
+          "read_seq": 140,
+          "visible_from_seq": 1
+        },
+        "properties": {
+          "conversation_id": {
+            "description": "Unique ID of the conversation.",
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "delivered_seq": {
+            "description": "Last sequence confirmed delivered.",
+            "minimum": 0.0,
+            "title": "Delivered Seq",
+            "type": "integer"
+          },
+          "last_seq": {
+            "description": "Highest committed sequence in the chat.",
+            "minimum": 0.0,
+            "title": "Last Seq",
+            "type": "integer"
+          },
+          "read_seq": {
+            "description": "Last sequence marked as read by user.",
+            "minimum": 0.0,
+            "title": "Read Seq",
+            "type": "integer"
+          },
+          "visible_from_seq": {
+            "description": "Earliest sequence this user has permission to read.",
+            "minimum": 1.0,
+            "title": "Visible From Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "last_seq",
+          "delivered_seq",
+          "read_seq",
+          "visible_from_seq"
+        ],
+        "title": "ConversationSyncItem",
         "type": "object"
       },
       "CreateAttachment": {
@@ -131,6 +207,88 @@
         "title": "CreateAttachment",
         "type": "object"
       },
+      "DeleteMessageResponse": {
+        "description": "Response returned upon successfully creating a tombstone message deletion (P2).",
+        "example": {
+          "created_at": "2026-10-30T10:20:00.000000Z",
+          "id": "0192df78-8bc4-7123-93df-520e5e4860f5",
+          "kind": "delete",
+          "seq": 155,
+          "target_seq": 150
+        },
+        "properties": {
+          "created_at": {
+            "description": "Timestamp when deletion was recorded.",
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "description": "UUIDv7 of the tombstone message.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "delete",
+            "default": "delete",
+            "description": "Tombstone kind.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "seq": {
+            "description": "Sequence number of the tombstone entry.",
+            "minimum": 1.0,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "target_seq": {
+            "description": "Sequence number of the deleted message.",
+            "minimum": 1.0,
+            "title": "Target Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "id",
+          "target_seq",
+          "created_at"
+        ],
+        "title": "DeleteMessageResponse",
+        "type": "object"
+      },
+      "GetMessagesResponse": {
+        "description": "Paginated messages response for catch-up and conversation viewing.",
+        "properties": {
+          "has_more": {
+            "description": "True if there are additional newer messages to fetch.",
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "last_seq": {
+            "description": "Highest sequence returned in this batch.",
+            "minimum": 0.0,
+            "title": "Last Seq",
+            "type": "integer"
+          },
+          "messages": {
+            "description": "List of messages in order of seq.",
+            "items": {
+              "$ref": "#/components/schemas/MessageItem"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "messages",
+          "has_more",
+          "last_seq"
+        ],
+        "title": "GetMessagesResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -142,6 +300,295 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "MessageItem": {
+        "description": "A single stored message in a conversation.",
+        "example": {
+          "body": "All services healthy on Postgres 18 and Valkey.",
+          "client_msg_id": "b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e",
+          "conversation_id": "c1a2b3c4-d5e6-7f80-91a2-b3c4d5e6f7a8",
+          "created_at": "2026-10-30T10:15:30.123456Z",
+          "enc_scheme": 0,
+          "id": "0192df78-8bc4-7123-93df-520e5e4860b0",
+          "kind": "text",
+          "sender_id": "f4d5e6f7-a8b9-8091-a2b3-c4d5e6f7a8d1",
+          "seq": 150
+        },
+        "properties": {
+          "attachment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Associated media attachment ID if any.",
+            "title": "Attachment Id"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Message body text.",
+            "title": "Body"
+          },
+          "client_msg_id": {
+            "description": "Client-provided idempotency ID.",
+            "format": "uuid",
+            "title": "Client Msg Id",
+            "type": "string"
+          },
+          "conversation_id": {
+            "description": "ID of the conversation.",
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "Message creation timestamp.",
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enc_scheme": {
+            "default": 0,
+            "description": "Encryption scheme.",
+            "title": "Enc Scheme",
+            "type": "integer"
+          },
+          "id": {
+            "description": "Message UUIDv7.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "description": "Kind of message.",
+            "enum": [
+              "text",
+              "media",
+              "system",
+              "delete",
+              "edit"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "sender_id": {
+            "description": "User ID of the sender.",
+            "format": "uuid",
+            "title": "Sender Id",
+            "type": "string"
+          },
+          "seq": {
+            "description": "Message sequence number in this chat.",
+            "minimum": 1.0,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "target_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Target sequence if kind is 'delete' or 'edit'.",
+            "title": "Target Seq"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "seq",
+          "id",
+          "sender_id",
+          "client_msg_id",
+          "kind",
+          "created_at"
+        ],
+        "title": "MessageItem",
+        "type": "object"
+      },
+      "ReportOut": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "ReportOut",
+        "type": "object"
+      },
+      "ReportRequest": {
+        "properties": {
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "seq": {
+            "minimum": 1.0,
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "seq",
+          "reason"
+        ],
+        "title": "ReportRequest",
+        "type": "object"
+      },
+      "SendMessageRequest": {
+        "description": "Payload for submitting a message to a conversation.",
+        "example": {
+          "body": "Namaste Bharat! This is our first message.",
+          "client_msg_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+          "enc_scheme": 0,
+          "kind": "text"
+        },
+        "properties": {
+          "attachment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ID of a pre-uploaded attachment in ready state. Required for media.",
+            "title": "Attachment Id"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Message body text (max 8000 characters). Normalized to NFC.",
+            "title": "Body"
+          },
+          "client_msg_id": {
+            "description": "Client-generated unique ID for idempotent deduplication.",
+            "format": "uuid",
+            "title": "Client Msg Id",
+            "type": "string"
+          },
+          "enc_scheme": {
+            "default": 0,
+            "description": "Encryption scheme identifier (0 = plaintext / server-managed).",
+            "minimum": 0.0,
+            "title": "Enc Scheme",
+            "type": "integer"
+          },
+          "kind": {
+            "default": "text",
+            "description": "Message kind. Clients may only submit 'text' or 'media'.",
+            "enum": [
+              "text",
+              "media"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_msg_id"
+        ],
+        "title": "SendMessageRequest",
+        "type": "object"
+      },
+      "SendMessageResponse": {
+        "description": "Response returned upon successful message submission or idempotent retry.",
+        "example": {
+          "created_at": "2026-10-30T10:15:30.123456Z",
+          "duplicate": false,
+          "id": "0192df78-8bc4-7123-93df-520e5e4860b0",
+          "seq": 42
+        },
+        "properties": {
+          "created_at": {
+            "description": "Timestamp when message was stored.",
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "duplicate": {
+            "default": false,
+            "description": "True if this send was an idempotent retry of an existing message.",
+            "title": "Duplicate",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Server-assigned UUIDv7 of the message.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly gapless monotonic sequence number.",
+            "minimum": 1.0,
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "id",
+          "created_at"
+        ],
+        "title": "SendMessageResponse",
+        "type": "object"
+      },
+      "SyncConversationsResponse": {
+        "description": "List of all active conversation memberships and cursors for catch-up sync.",
+        "properties": {
+          "conversations": {
+            "description": "List of active conversation synchronization states.",
+            "items": {
+              "$ref": "#/components/schemas/ConversationSyncItem"
+            },
+            "title": "Conversations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "conversations"
+        ],
+        "title": "SyncConversationsResponse",
         "type": "object"
       },
       "UploadTicket": {
@@ -214,6 +661,31 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "WsTicketResponse": {
+        "description": "Response returned by POST /v1/ws-ticket.",
+        "example": {
+          "expires_in": 30,
+          "ticket": "wstk_8f91a2c3d4e5f67890abcdef"
+        },
+        "properties": {
+          "expires_in": {
+            "default": 30,
+            "description": "Ticket expiration time in seconds.",
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "ticket": {
+            "description": "Single-use, 30s ticket for WebSocket authentication.",
+            "title": "Ticket",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket"
+        ],
+        "title": "WsTicketResponse",
         "type": "object"
       }
     },
@@ -448,11 +920,434 @@
     "/v1/conversations": {
       "post": {
         "operationId": "create_conversation_endpoint_v1_conversations_post",
+    "/v1/blocks": {
+      "get": {
+        "operationId": "list_blocks_v1_blocks_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-dev-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-dev-tenant-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BlockedUser"
+                  },
+                  "title": "Response List Blocks V1 Blocks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Blocks",
+        "tags": [
+          "moderation"
+        ]
+      },
+      "post": {
+        "operationId": "block_user_v1_blocks_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-dev-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-dev-tenant-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-Tenant-Id"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ConversationCreate"
+                "$ref": "#/components/schemas/BlockRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Block User",
+        "tags": [
+          "moderation"
+        ]
+      }
+    },
+    "/v1/blocks/{user_id}": {
+      "delete": {
+        "operationId": "unblock_user_v1_blocks__user_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-dev-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-dev-tenant-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unblock User",
+        "tags": [
+          "moderation"
+        ]
+      }
+    },
+    "/v1/conversations/{conversation_id}/messages": {
+      "get": {
+        "description": "Returns messages in seq order after a given sequence number for catch-up.",
+        "operationId": "get_messages_endpoint_v1_conversations__conversation_id__messages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Retrieve messages strictly after this seq",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Retrieve messages strictly after this seq",
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum messages to return",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Maximum messages to return",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-tenant-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-device-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetMessagesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List messages in conversation",
+        "tags": [
+          "messaging"
+        ]
+      },
+      "post": {
+        "description": "Sends a text or media message to a conversation. Submitting the same client_msg_id will return the existing message idempotently.",
+        "operationId": "send_message_endpoint_v1_conversations__conversation_id__messages_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-tenant-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-device-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
               }
             }
           },
@@ -464,6 +1359,7 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ConversationOut"
+                  "$ref": "#/components/schemas/SendMessageResponse"
                 }
               }
             },
@@ -488,6 +1384,538 @@
         "summary": "Create Conversation Endpoint",
         "tags": [
           "conversations"
+        "summary": "Send a message to a conversation",
+        "tags": [
+          "messaging"
+        ]
+      }
+    },
+    "/v1/conversations/{conversation_id}/messages/{target_seq}": {
+      "delete": {
+        "description": "Appends a tombstone message deletion (kind='delete', target_seq=target_seq). The message row is never deleted from the database (Invariant I6). Only the original message sender or a conversation admin may delete a message.",
+        "operationId": "delete_message_endpoint_v1_conversations__conversation_id__messages__target_seq__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sequence number of message to delete",
+            "in": "path",
+            "name": "target_seq",
+            "required": true,
+            "schema": {
+              "description": "Sequence number of message to delete",
+              "minimum": 1,
+              "title": "Target Seq",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Idempotency-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-tenant-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-device-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteMessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete a message (tombstone)",
+        "tags": [
+          "messaging"
+        ]
+      }
+    },
+    "/v1/devices/{device_id}/revoke": {
+      "post": {
+        "description": "Pushes a 'revoked' frame to the active device WebSocket connection and terminates it.",
+        "operationId": "revoke_device_endpoint_v1_devices__device_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "reason",
+            "required": false,
+            "schema": {
+              "default": "Device session revoked by security policy",
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-tenant-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-device-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revoke Device Endpoint V1 Devices  Device Id  Revoke Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke device session (Member 2 hook / P2)",
+        "tags": [
+          "realtime"
+        ]
+      }
+    },
+    "/v1/reports": {
+      "post": {
+        "operationId": "report_message_v1_reports_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-dev-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-dev-tenant-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report Message",
+        "tags": [
+          "moderation"
+        ]
+      }
+    },
+    "/v1/sync/conversations": {
+      "get": {
+        "description": "Returns all active conversation memberships and sync cursors for the authenticated user.",
+        "operationId": "sync_conversations_endpoint_v1_sync_conversations_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-tenant-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-device-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncConversationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sync active conversations",
+        "tags": [
+          "messaging"
+        ]
+      }
+    },
+    "/v1/ws-ticket": {
+      "post": {
+        "description": "Issues a single-use ticket stored in Valkey with a 30s TTL for WebSocket authentication.",
+        "operationId": "create_ws_ticket_endpoint_v1_ws_ticket_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-tenant-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-device-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WsTicketResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Issue WebSocket ticket (Plan D-5)",
+        "tags": [
+          "realtime"
         ]
       }
     }

@@ -91,7 +91,9 @@ def complete_attachment(
         if size is None or size <= 0:
             raise HTTPException(status_code=409, detail="upload not received")
         if size > MAX_UPLOAD_BYTES:
-            conn.execute("UPDATE attachments SET state = 'rejected' WHERE id = %s", (attachment_id,))
+            conn.execute(
+                "UPDATE attachments SET state = 'rejected' WHERE id = %s", (attachment_id,)
+            )
             return AttachmentOut(id=attachment_id, state="rejected")
         conn.execute("UPDATE attachments SET byte_size = %s WHERE id = %s", (size, attachment_id))
     enqueue_processing(attachment_id)  # the worker marks it ready or rejected
