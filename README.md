@@ -11,6 +11,7 @@ make migrate   # Alembic upgrade head
 make test      # pytest (creates varta_test automatically)
 make run       # API at http://localhost:8000/health
 ```
+**Environment configuration:** The API requires `JWT_SECRET` for signing and validating authentication tokens. It is included in `.env.example` for local development. For production, generate a strong, unique secret and keep it private. Never commit your actual `.env` file or production secrets.
 
 Requires Docker and [uv](https://docs.astral.sh/uv/). Run `uv sync` in `server/` once.
 
