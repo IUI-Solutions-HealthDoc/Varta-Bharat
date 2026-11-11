@@ -2,11 +2,16 @@ from contextlib import asynccontextmanager
 import logging
 
 import psycopg
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 
 from app.config import settings
 from app.logging_setup import setup_logging
 from app.media.router import router as media_router
+from app.conversations.router import router as conversations_router
+from typing import Annotated
+
+
+from app.auth.dependencies import AuthUser, current_user
 from app.messaging.router import router as messaging_router
 from app.moderation.router import router as moderation_router
 from app.ws.router import (
@@ -40,6 +45,7 @@ app = FastAPI(title="Varta Bharat API", version="0.1.0", lifespan=lifespan)
 app.include_router(messaging_router)
 app.include_router(ws_router)
 app.include_router(media_router)
+app.include_router(conversations_router)
 app.include_router(moderation_router)
 
 
@@ -57,3 +63,14 @@ def ready() -> dict:
         log.error("readiness check failed", extra={"ctx": {"error": type(exc).__name__}})
         raise HTTPException(status_code=503, detail="database unavailable") from exc
     return {"status": "ready"}
+
+
+@app.get("/v1/auth/me")
+def get_current_user(
+    user: Annotated[AuthUser, Depends(current_user)],
+):
+    return {
+        "user_id": str(user.id),
+        "tenant_id": str(user.tenant_id),
+        "device_id": str(user.device_id),
+    }
