@@ -20,6 +20,97 @@
         "title": "AttachmentOut",
         "type": "object"
       },
+      "ConversationCreate": {
+        "properties": {
+          "community_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Community Id"
+          },
+          "kind": {
+            "enum": [
+              "private",
+              "public",
+              "announcement"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ConversationCreate",
+        "type": "object"
+      },
+      "ConversationOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "title": "Created By",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "kind",
+          "title",
+          "created_by",
+          "created_at"
+        ],
+        "title": "ConversationOut",
+        "type": "object"
+      },
       "CreateAttachment": {
         "properties": {
           "byte_size": {
@@ -125,6 +216,12 @@
         "title": "ValidationError",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -133,6 +230,27 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/auth/me": {
+      "get": {
+        "operationId": "get_current_user_auth_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Current User"
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health_health_get",
@@ -324,6 +442,52 @@
         "summary": "Complete Attachment",
         "tags": [
           "attachments"
+        ]
+      }
+    },
+    "/v1/conversations": {
+      "post": {
+        "operationId": "create_conversation_endpoint_v1_conversations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Conversation Endpoint",
+        "tags": [
+          "conversations"
         ]
       }
     }
