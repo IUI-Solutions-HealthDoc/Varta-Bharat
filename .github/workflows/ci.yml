@@ -1,4 +1,4 @@
-name: ci
+﻿name: ci
 on:
   pull_request:
   push:
@@ -59,7 +59,7 @@ jobs:
       - name: Scan repository history
         run: gitleaks detect --source . --redact --verbose
 
-  
+
   types:
     runs-on: ubuntu-latest
     env:

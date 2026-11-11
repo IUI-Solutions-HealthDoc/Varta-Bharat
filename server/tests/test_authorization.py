@@ -1,4 +1,3 @@
-
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -37,6 +36,7 @@ def access(user):
 # Basic conversation access
 # --------------------------------------------------
 
+
 def test_active_member_can_read(user, access):
     authorize(user, "read", uuid4(), access)
 
@@ -67,10 +67,9 @@ def test_non_member_cannot_send_to_private_conversation(user, access):
 # Public and announcement conversation access
 # --------------------------------------------------
 
+
 @pytest.mark.parametrize("kind", ["public", "announcement"])
-def test_tenant_member_can_read_without_conversation_membership(
-    user, access, kind
-):
+def test_tenant_member_can_read_without_conversation_membership(user, access, kind):
     access = replace(
         access,
         kind=kind,
@@ -109,6 +108,7 @@ def test_non_member_cannot_send_to_announcement(user, access):
 # --------------------------------------------------
 # Membership and account status
 # --------------------------------------------------
+
 
 def test_member_who_left_cannot_access_conversation(user, access):
     access = replace(
@@ -162,6 +162,7 @@ def test_inactive_tenant_member_cannot_access_conversation(user, access):
 # Tenant isolation
 # --------------------------------------------------
 
+
 def test_other_tenant_gets_404(user, access):
     access = replace(
         access,
@@ -184,6 +185,7 @@ def test_missing_conversation_returns_404(user):
 # --------------------------------------------------
 # Admin permissions
 # --------------------------------------------------
+
 
 def test_only_admin_can_manage_members(user, access):
     with pytest.raises(HTTPException) as exc:
@@ -214,6 +216,7 @@ def test_admin_can_manage_settings(user, access):
 # Announcement permissions
 # --------------------------------------------------
 
+
 def test_only_admin_can_send_announcement(user, access):
     access = replace(
         access,
@@ -239,6 +242,7 @@ def test_admin_can_send_announcement(user, access):
 # --------------------------------------------------
 # Unsupported actions
 # --------------------------------------------------
+
 
 def test_unsupported_action_is_rejected(user, access):
     with pytest.raises(HTTPException) as exc:

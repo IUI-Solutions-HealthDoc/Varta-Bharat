@@ -1,5 +1,5 @@
-
 from dataclasses import dataclass
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, HTTPException
@@ -7,7 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.exceptions import InvalidTokenError
 
 from app.auth.security import decode_access_token
-from typing import Annotated
+from app.core.db import get_conn
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -36,7 +36,7 @@ def current_user(
     try:
         payload = decode_access_token(credentials.credentials)
 
-        return AuthUser(
+        user = AuthUser(
             id=UUID(payload["sub"]),
             tenant_id=UUID(payload["tenant_id"]),
             device_id=UUID(payload["device_id"]),
@@ -48,3 +48,24 @@ def current_user(
             detail="Invalid or expired access token",
             headers={"WWW-Authenticate": "Bearer"},
         ) from None
+
+    with get_conn() as conn:
+        device = conn.execute(
+            """
+            SELECT 1
+            FROM devices
+            WHERE id = %s
+              AND user_id = %s
+              AND revoked_at IS NULL
+            """,
+            (user.device_id, user.id),
+        ).fetchone()
+
+    if device is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Device session is invalid or revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user

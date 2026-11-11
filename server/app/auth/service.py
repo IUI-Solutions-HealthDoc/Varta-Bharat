@@ -1,4 +1,3 @@
-
 from uuid import UUID
 
 import psycopg
@@ -35,4 +34,3 @@ def authorize(
         conversation_id=conversation_id,
         access=access,
     )
- 

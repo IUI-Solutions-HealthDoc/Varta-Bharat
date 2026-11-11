@@ -1,4 +1,3 @@
-
 import psycopg
 from fastapi import HTTPException
 
