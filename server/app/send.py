@@ -18,6 +18,7 @@ import psycopg
 from psycopg.pq import TransactionStatus
 
 from app.media.validation import AttachmentRejected, validate_attachment_for_send
+from app.moderation.blocks import blocked_between
 
 log = logging.getLogger("varta.send")
 
@@ -181,16 +182,8 @@ def send_message(
                     "WHERE conversation_id = %s AND user_id <> %s",
                     (conversation_id, sender_id),
                 ).fetchone()
-                if other is not None:
-                    other_id = other[0]
-                    blocked = conn.execute(
-                        "SELECT 1 FROM user_blocks "
-                        "WHERE (blocker_id = %s AND blocked_id = %s) "
-                        "   OR (blocker_id = %s AND blocked_id = %s)",
-                        (sender_id, other_id, other_id, sender_id),
-                    ).fetchone()
-                    if blocked is not None:
-                        raise NotAllowed("user is blocked")
+                if other is not None and blocked_between(conn, sender_id, other[0]):
+                    raise NotAllowed("user is blocked")
 
             # 3d. Attachment validation
             if attachment_id is not None:

@@ -503,3 +503,74 @@ def test_sync_and_get_messages_rejects_removed_tenant_member_and_inactive_user(c
     assert r_sync_susp.status_code == 200
     conv_ids_susp = [c["conversation_id"] for c in r_sync_susp.json()["conversations"]]
     assert str(conv_id) not in conv_ids_susp
+
+
+def test_revoke_device_cross_tenant_admin_and_missing_device_returns_404(conn):
+    """Tenant admin cannot revoke a device belonging to another tenant or a missing device ID (returns 404)."""
+    s_a = seed_chat(conn)
+    s_b = seed_chat(conn)
+
+    admin_a = s_a["alice"]
+    bob_a = s_a["bob"]
+    carol_a = s_a["carol"]
+    tenant_a = s_a["tenant"]
+
+    bob_b = s_b["bob"]
+
+    # Make alice_a a tenant admin of tenant_a
+    conn.execute(
+        "UPDATE tenant_members SET role = 'admin' WHERE tenant_id = %s AND user_id = %s",
+        (tenant_a, admin_a),
+    )
+
+    bob_a_device = uuid4()
+    bob_b_device = uuid4()
+    carol_a_device = uuid4()
+
+    for dev_id, uid in (
+        (bob_a_device, bob_a),
+        (bob_b_device, bob_b),
+        (carol_a_device, carol_a),
+    ):
+        conn.execute(
+            "INSERT INTO devices (id, user_id, platform, push_token, refresh_hash, refresh_family) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (dev_id, uid, "android", f"push_{dev_id}", b"hash", uuid4()),
+        )
+
+    # Remove carol_a from tenant_a
+    conn.execute(
+        "UPDATE tenant_members SET removed_at = now() WHERE tenant_id = %s AND user_id = %s",
+        (tenant_a, carol_a),
+    )
+    conn.commit()
+
+    headers_admin_a = {
+        "Authorization": f"Bearer {admin_a}",
+        "X-Tenant-Id": str(tenant_a),
+    }
+
+    # 1. Admin of Tenant A attempts to revoke a device owned by user in Tenant B -> 404
+    r_cross = client.post(f"/v1/devices/{bob_b_device}/revoke", headers=headers_admin_a)
+    assert r_cross.status_code == 404
+    revoked_at_b = conn.execute(
+        "SELECT revoked_at FROM devices WHERE id = %s", (bob_b_device,)
+    ).fetchone()[0]
+    assert revoked_at_b is None
+
+    # 2. Admin of Tenant A attempts to revoke a non-existent device ID -> 404
+    r_missing = client.post(f"/v1/devices/{uuid4()}/revoke", headers=headers_admin_a)
+    assert r_missing.status_code == 404
+
+    # 3. Admin of Tenant A attempts to revoke a device of a removed tenant member -> 404
+    r_removed = client.post(f"/v1/devices/{carol_a_device}/revoke", headers=headers_admin_a)
+    assert r_removed.status_code == 404
+
+    # 4. Admin of Tenant A revokes a device of an active member in Tenant A -> 200 OK
+    r_same = client.post(f"/v1/devices/{bob_a_device}/revoke", headers=headers_admin_a)
+    assert r_same.status_code == 200
+    assert r_same.json()["revoked"] is True
+    revoked_at_a = conn.execute(
+        "SELECT revoked_at FROM devices WHERE id = %s", (bob_a_device,)
+    ).fetchone()[0]
+    assert revoked_at_a is not None

@@ -358,44 +358,55 @@ def revoke_device_session_sync(
     return _close_revoked_device_sockets(device_id, reason)
 
 
-def _check_device_revoke_auth_and_mark(
-    d_id: UUID, u_id: UUID, t_id: UUID, u_dev_id: UUID
-) -> tuple[bool, bool]:
-    """Check if user owns device or is tenant admin, and mark revoked in devices table if present."""
+def _check_device_revoke_auth_and_mark(d_id: UUID, u_id: UUID, t_id: UUID, u_dev_id: UUID) -> str:
+    """Check if user owns device or is tenant admin of the device owner's tenant, and mark revoked."""
     with get_conn() as conn:
-        row = conn.execute("SELECT user_id FROM devices WHERE id = %s", (d_id,)).fetchone()
-        if row is not None:
-            dev_user_id = row[0]
-            if dev_user_id == u_id:
-                conn.execute(
-                    "UPDATE devices SET revoked_at = now() WHERE id = %s AND revoked_at IS NULL",
-                    (d_id,),
-                )
-                return (True, True)
-            # Check tenant admin
-            tm = conn.execute(
-                "SELECT role FROM tenant_members WHERE tenant_id = %s AND user_id = %s AND removed_at IS NULL",
-                (t_id, u_id),
-            ).fetchone()
-            if tm and tm[0] == "admin":
-                conn.execute(
-                    "UPDATE devices SET revoked_at = now() WHERE id = %s AND revoked_at IS NULL",
-                    (d_id,),
-                )
-                return (True, True)
-            return (False, True)  # Exists but unauthorized
-        else:
-            # Device not in devices table (e.g. dev session)
+        row = conn.execute(
+            """
+            SELECT d.user_id, tm.user_id IS NOT NULL AS owner_in_tenant
+            FROM devices d
+            LEFT JOIN tenant_members tm
+              ON tm.user_id = d.user_id
+             AND tm.tenant_id = %s
+             AND tm.removed_at IS NULL
+            WHERE d.id = %s
+            """,
+            (t_id, d_id),
+        ).fetchone()
+
+        if row is None:
+            # Device row missing: only allow if caller is revoking their own active session device
             if u_dev_id == d_id:
-                return (True, False)
-            # Check tenant admin
-            tm = conn.execute(
-                "SELECT role FROM tenant_members WHERE tenant_id = %s AND user_id = %s AND removed_at IS NULL",
-                (t_id, u_id),
-            ).fetchone()
-            if tm and tm[0] == "admin":
-                return (True, False)
-            return (False, False)
+                return "authorized"
+            return "not_found"
+
+        dev_user_id, owner_in_tenant = row
+        if dev_user_id == u_id:
+            conn.execute(
+                "UPDATE devices SET revoked_at = now() WHERE id = %s AND revoked_at IS NULL",
+                (d_id,),
+            )
+            return "authorized"
+
+        if not owner_in_tenant:
+            return "not_found"
+
+        # Device owner is an active member of caller's tenant; check if caller is tenant admin
+        caller_tm = conn.execute(
+            """
+            SELECT role FROM tenant_members
+            WHERE tenant_id = %s AND user_id = %s AND removed_at IS NULL
+            """,
+            (t_id, u_id),
+        ).fetchone()
+        if caller_tm and caller_tm[0] == "admin":
+            conn.execute(
+                "UPDATE devices SET revoked_at = now() WHERE id = %s AND revoked_at IS NULL",
+                (d_id,),
+            )
+            return "authorized"
+
+        return "forbidden"
 
 
 @router.post(
@@ -409,14 +420,19 @@ async def revoke_device_endpoint(
     user: Annotated[AuthUser, Depends(get_current_user)],
     reason: str = "Device session revoked by security policy",
 ) -> dict:
-    authorized, exists = await asyncio.to_thread(
+    result = await asyncio.to_thread(
         _check_device_revoke_auth_and_mark,
         device_id,
         user.id,
         user.tenant_id,
         user.device_id,
     )
-    if not authorized:
+    if result == "not_found":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Device not found in tenant",
+        )
+    if result != "authorized":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to revoke this device session",

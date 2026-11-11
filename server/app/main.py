@@ -8,6 +8,7 @@ from app.config import settings
 from app.logging_setup import setup_logging
 from app.media.router import router as media_router
 from app.messaging.router import router as messaging_router
+from app.moderation.router import router as moderation_router
 from app.ws.router import (
     ensure_valkey_subscriber,
     router as ws_router,
@@ -39,6 +40,7 @@ app = FastAPI(title="Varta Bharat API", version="0.1.0", lifespan=lifespan)
 app.include_router(messaging_router)
 app.include_router(ws_router)
 app.include_router(media_router)
+app.include_router(moderation_router)
 
 
 @app.get("/health")
