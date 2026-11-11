@@ -108,7 +108,9 @@ def test_complete_after_upload_records_real_size_and_stays_pending(client, conn)
 def test_other_user_and_other_tenant_get_404(client, conn):
     chat = seed_chat(conn)
     att = create(client, chat).json()["id"]
-    assert client.post(f"/v1/attachments/{att}/complete", headers=hdr(chat, "bob")).status_code == 404
+    assert (
+        client.post(f"/v1/attachments/{att}/complete", headers=hdr(chat, "bob")).status_code == 404
+    )
     other = hdr(chat, tenant=uuid4())
     assert client.post(f"/v1/attachments/{att}/complete", headers=other).status_code == 404
     assert client.post(f"/v1/attachments/{uuid4()}/complete", headers=hdr(chat)).status_code == 404
