@@ -266,6 +266,29 @@
         "title": "DeleteMessageResponse",
         "type": "object"
       },
+      "DownloadOut": {
+        "properties": {
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "mime": {
+            "title": "Mime",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "mime",
+          "expires_in"
+        ],
+        "title": "DownloadOut",
+        "type": "object"
+      },
       "GetMessagesResponse": {
         "description": "Paginated messages response for catch-up and conversation viewing.",
         "properties": {
@@ -839,6 +862,64 @@
           }
         ],
         "summary": "Complete Attachment",
+        "tags": [
+          "attachments"
+        ]
+      }
+    },
+    "/v1/attachments/{attachment_id}/download": {
+      "get": {
+        "operationId": "download_attachment_v1_attachments__attachment_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attachment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Attachment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "thumb",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Thumb",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Attachment",
         "tags": [
           "attachments"
         ]
