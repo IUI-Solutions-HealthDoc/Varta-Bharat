@@ -9,7 +9,7 @@ from app.config import settings
 from app.core import db
 from app.main import app
 from app.media.storage import MAX_UPLOAD_BYTES, Storage, get_storage
-from tests.helpers import seed_chat
+from tests.helpers import auth_headers, seed_chat
 
 
 class FakeStorage:
@@ -37,11 +37,8 @@ def client(db_url, monkeypatch):
     db.close_pool()
 
 
-def hdr(chat, who="alice", tenant=None):
-    return {
-        "X-Dev-User-Id": str(chat[who]),
-        "X-Dev-Tenant-Id": str(tenant or chat["tenant"]),
-    }
+def hdr(chat, who="alice"):
+    return auth_headers(chat, who)
 
 
 def create(client, chat, who="alice", mime="image/png", size=1000):
@@ -111,7 +108,7 @@ def test_other_user_and_other_tenant_get_404(client, conn):
     assert (
         client.post(f"/v1/attachments/{att}/complete", headers=hdr(chat, "bob")).status_code == 404
     )
-    other = hdr(chat, tenant=uuid4())
+    other = auth_headers(seed_chat(conn))
     assert client.post(f"/v1/attachments/{att}/complete", headers=other).status_code == 404
     assert client.post(f"/v1/attachments/{uuid4()}/complete", headers=hdr(chat)).status_code == 404
 

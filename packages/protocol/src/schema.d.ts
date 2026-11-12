@@ -741,10 +741,7 @@ export interface operations {
     create_attachment_v1_attachments_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -777,10 +774,7 @@ export interface operations {
     complete_attachment_v1_attachments__attachment_id__complete_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path: {
                 attachment_id: string;
             };
@@ -831,10 +825,7 @@ export interface operations {
     list_blocks_v1_blocks_get: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -849,24 +840,12 @@ export interface operations {
                     "application/json": components["schemas"]["BlockedUser"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     block_user_v1_blocks_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -897,10 +876,7 @@ export interface operations {
     unblock_user_v1_blocks__user_id__delete: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path: {
                 user_id: string;
             };
@@ -1122,10 +1098,7 @@ export interface operations {
     report_message_v1_reports_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
