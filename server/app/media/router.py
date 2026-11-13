@@ -98,3 +98,8 @@ def complete_attachment(
         conn.execute("UPDATE attachments SET byte_size = %s WHERE id = %s", (size, attachment_id))
     enqueue_processing(attachment_id)  # the worker marks it ready or rejected
     return AttachmentOut(id=attachment_id, state="pending")
+
+
+from app.media.download import router as download_router  # noqa: E402
+
+router.include_router(download_router)

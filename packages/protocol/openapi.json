@@ -266,6 +266,29 @@
         "title": "DeleteMessageResponse",
         "type": "object"
       },
+      "DownloadOut": {
+        "properties": {
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "mime": {
+            "title": "Mime",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "mime",
+          "expires_in"
+        ],
+        "title": "DownloadOut",
+        "type": "object"
+      },
       "GetMessagesResponse": {
         "description": "Paginated messages response for catch-up and conversation viewing.",
         "properties": {
@@ -753,42 +776,6 @@
     "/v1/attachments": {
       "post": {
         "operationId": "create_attachment_v1_attachments_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-dev-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-dev-tenant-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-Tenant-Id"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -821,6 +808,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Create Attachment",
         "tags": [
           "attachments"
@@ -839,40 +831,6 @@
               "format": "uuid",
               "title": "Attachment Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-dev-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-dev-tenant-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-Tenant-Id"
             }
           }
         ],
@@ -898,7 +856,70 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Complete Attachment",
+        "tags": [
+          "attachments"
+        ]
+      }
+    },
+    "/v1/attachments/{attachment_id}/download": {
+      "get": {
+        "operationId": "download_attachment_v1_attachments__attachment_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attachment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Attachment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "thumb",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Thumb",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Attachment",
         "tags": [
           "attachments"
         ]
@@ -928,42 +949,6 @@
     "/v1/blocks": {
       "get": {
         "operationId": "list_blocks_v1_blocks_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-dev-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-dev-tenant-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-Tenant-Id"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -978,18 +963,13 @@
               }
             },
             "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Blocks",
         "tags": [
           "moderation"
@@ -997,42 +977,6 @@
       },
       "post": {
         "operationId": "block_user_v1_blocks_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-dev-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-dev-tenant-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-Tenant-Id"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1058,6 +1002,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Block User",
         "tags": [
           "moderation"
@@ -1077,40 +1026,6 @@
               "title": "User Id",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-dev-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-dev-tenant-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-Tenant-Id"
-            }
           }
         ],
         "responses": {
@@ -1128,6 +1043,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Unblock User",
         "tags": [
           "moderation"
@@ -1690,42 +1610,6 @@
     "/v1/reports": {
       "post": {
         "operationId": "report_message_v1_reports_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-dev-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-dev-tenant-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Dev-Tenant-Id"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1758,6 +1642,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Report Message",
         "tags": [
           "moderation"

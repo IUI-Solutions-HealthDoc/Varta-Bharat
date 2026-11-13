@@ -61,6 +61,19 @@ class Storage:
             raise
         return head["ContentLength"]
 
+    def presign_get(self, key: str, mime: str, disposition: str, seconds: int = 300) -> str:
+        """Short-lived download URL. The URL is a bearer capability: never log it."""
+        return self._client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": settings.s3_bucket,
+                "Key": key,
+                "ResponseContentType": mime,
+                "ResponseContentDisposition": disposition,
+            },
+            ExpiresIn=seconds,
+        )
+
 
 @lru_cache
 def get_storage() -> Storage:

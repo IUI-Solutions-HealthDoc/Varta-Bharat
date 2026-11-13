@@ -72,3 +72,18 @@ def seed_chat(conn: psycopg.Connection, conv_kind: str = "private") -> dict:
         )
     conn.commit()
     return {"tenant": tenant, "conv": conv, **ids}
+
+
+def auth_headers(chat: dict, who: str = "alice") -> dict:
+    """Bearer headers for a seeded user. current_user also checks that the device exists."""
+    from app.auth.security import create_access_token  # lazy: needs JWT_SECRET
+
+    device_id = uuid.uuid4()
+    with psycopg.connect(TEST_URL) as c:
+        c.execute(
+            "INSERT INTO devices (id, user_id, platform, refresh_hash, refresh_family) "
+            "VALUES (%s, %s, 'web', %s, %s)",
+            (device_id, chat[who], b"test-refresh-hash", uuid.uuid4()),
+        )
+    token = create_access_token(str(chat[who]), str(chat["tenant"]), str(device_id))
+    return {"Authorization": f"Bearer {token}"}
