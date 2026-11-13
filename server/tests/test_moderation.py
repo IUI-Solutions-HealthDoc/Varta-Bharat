@@ -8,7 +8,7 @@ from app.config import settings
 from app.core import db
 from app.main import app
 from app.moderation.blocks import blocked_between
-from tests.helpers import seed_chat
+from tests.helpers import auth_headers, seed_chat
 
 
 @pytest.fixture
@@ -20,11 +20,8 @@ def client(db_url, monkeypatch):
     db.close_pool()
 
 
-def hdr(chat, who="alice", tenant=None):
-    return {
-        "X-Dev-User-Id": str(chat[who]),
-        "X-Dev-Tenant-Id": str(tenant or chat["tenant"]),
-    }
+def hdr(chat, who="alice"):
+    return auth_headers(chat, who)
 
 
 def add_message(conn, chat, sender="bob"):

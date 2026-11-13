@@ -72,6 +72,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/attachments/{attachment_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Attachment */
+        get: operations["download_attachment_v1_attachments__attachment_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/me": {
         parameters: {
             query?: never;
@@ -421,6 +438,15 @@ export interface components {
              */
             target_seq: number;
         };
+        /** DownloadOut */
+        DownloadOut: {
+            /** Expires In */
+            expires_in: number;
+            /** Mime */
+            mime: string;
+            /** Url */
+            url: string;
+        };
         /**
          * GetMessagesResponse
          * @description Paginated messages response for catch-up and conversation viewing.
@@ -741,10 +767,7 @@ export interface operations {
     create_attachment_v1_attachments_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -777,10 +800,7 @@ export interface operations {
     complete_attachment_v1_attachments__attachment_id__complete_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path: {
                 attachment_id: string;
             };
@@ -795,6 +815,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AttachmentOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_attachment_v1_attachments__attachment_id__download_get: {
+        parameters: {
+            query?: {
+                thumb?: boolean;
+            };
+            header?: never;
+            path: {
+                attachment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DownloadOut"];
                 };
             };
             /** @description Validation Error */
@@ -831,10 +884,7 @@ export interface operations {
     list_blocks_v1_blocks_get: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -849,24 +899,12 @@ export interface operations {
                     "application/json": components["schemas"]["BlockedUser"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     block_user_v1_blocks_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -897,10 +935,7 @@ export interface operations {
     unblock_user_v1_blocks__user_id__delete: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path: {
                 user_id: string;
             };
@@ -1122,10 +1157,7 @@ export interface operations {
     report_message_v1_reports_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-dev-user-id"?: string | null;
-                "x-dev-tenant-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
