@@ -14,6 +14,9 @@ DENY_KEYS = {
     "secret",
 }
 
+UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
 
 def redact(value):
     if isinstance(value, dict):
@@ -45,3 +48,9 @@ def setup_logging(level: int = logging.INFO) -> None:
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level)
+    # uvicorn installs its own handlers and does not propagate; route them through ours too.
+    for name in UVICORN_LOGGERS:
+        lg = logging.getLogger(name)
+        lg.handlers = [handler]
+        lg.propagate = False
+        lg.setLevel(level)
