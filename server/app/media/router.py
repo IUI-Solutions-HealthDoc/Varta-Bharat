@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.db import get_conn
@@ -56,14 +56,39 @@ def create_attachment(
     body: CreateAttachment,
     user: Annotated[AuthUser, Depends(current_user)],
     storage: Annotated[Storage, Depends(get_storage)],
+    x_idempotency_key: Annotated[UUID | None, Header()] = None,
 ) -> UploadTicket:
+    """Create a pending attachment. A retry with the same X-Idempotency-Key returns the same
+    attachment (and a fresh upload ticket while it is still pending)."""
     key = f"{user.tenant_id}/{uuid4()}"  # server-chosen; the client never picks it
     with get_conn() as conn:
-        attachment_id = conn.execute(
-            "INSERT INTO attachments (tenant_id, uploader_id, object_key, mime, byte_size) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (user.tenant_id, user.id, key, body.mime, body.byte_size),
-        ).fetchone()[0]
+        row = conn.execute(
+            "INSERT INTO attachments "
+            "(tenant_id, uploader_id, object_key, mime, byte_size, idempotency_key) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (uploader_id, idempotency_key) "
+            "WHERE idempotency_key IS NOT NULL AND state <> 'rejected' DO NOTHING "
+            "RETURNING id",
+            (user.tenant_id, user.id, key, body.mime, body.byte_size, x_idempotency_key),
+        ).fetchone()
+        if row is None:  # a retry: this user already used this key
+            existing = conn.execute(
+                "SELECT id, object_key, mime, byte_size, state FROM attachments "
+                "WHERE tenant_id = %s AND uploader_id = %s AND idempotency_key = %s "
+                "AND state <> 'rejected'",
+                (user.tenant_id, user.id, x_idempotency_key),
+            ).fetchone()
+            if existing is None:  # the original was rejected between the two statements
+                raise HTTPException(status_code=409, detail="please retry")
+            attachment_id, key, mime, size, state = existing
+            if state != "pending":  # never hand out a new upload ticket for a checked object
+                raise HTTPException(status_code=409, detail="attachment already uploaded")
+            if mime != body.mime or size != body.byte_size:
+                raise HTTPException(
+                    status_code=409, detail="idempotency key was used for a different upload"
+                )
+        else:
+            attachment_id = row[0]
     post = storage.presign_post(key, body.mime)
     return UploadTicket(
         id=attachment_id, url=post["url"], fields=post["fields"], expires_in=PRESIGN_SECONDS
