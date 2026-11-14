@@ -47,7 +47,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Attachment */
+        /**
+         * Create Attachment
+         * @description Create a pending attachment. A retry with the same X-Idempotency-Key returns the same
+         *     attachment (and a fresh upload ticket while it is still pending).
+         */
         post: operations["create_attachment_v1_attachments_post"];
         delete?: never;
         options?: never;
@@ -767,7 +771,9 @@ export interface operations {
     create_attachment_v1_attachments_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-idempotency-key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

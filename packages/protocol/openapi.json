@@ -775,7 +775,27 @@
     },
     "/v1/attachments": {
       "post": {
+        "description": "Create a pending attachment. A retry with the same X-Idempotency-Key returns the same\nattachment (and a fresh upload ticket while it is still pending).",
         "operationId": "create_attachment_v1_attachments_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Idempotency-Key"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
