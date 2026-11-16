@@ -5,7 +5,7 @@ import psycopg
 import pytest
 
 from app.send import NotAllowed, send_message
-from tests.helpers import seed_chat
+from tests.helpers import auth_headers, seed_chat
 
 
 def _count(conn, conv):
@@ -290,3 +290,52 @@ def test_body_with_nul_byte_rejected(conn):
             body="hello\x00world",
         )
     assert _last_seq(conn, s["conv"]) == 0
+
+
+def test_send_endpoint_requires_real_bearer_auth_and_active_device(conn, db_url, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.config import settings
+    from app.main import app
+
+    monkeypatch.setattr(settings, "database_url", db_url)
+    client = TestClient(app)
+    s = seed_chat(conn)
+    conv_id = s["conv"]
+    alice_id = s["alice"]
+
+    # 1. Old stub headers (no header, X-User-Id, Bearer <uuid>) return 401
+    for bad_headers in (
+        {},
+        {"X-User-Id": str(alice_id)},
+        {"Authorization": f"Bearer {alice_id}"},
+    ):
+        r = client.post(
+            f"/v1/conversations/{conv_id}/messages",
+            json={"client_msg_id": str(uuid.uuid4()), "kind": "text", "body": "hi"},
+            headers=bad_headers,
+        )
+        assert r.status_code == 401
+
+    # 2. Valid bearer token from auth_headers succeeds
+    headers = auth_headers(s, "alice")
+    r_ok = client.post(
+        f"/v1/conversations/{conv_id}/messages",
+        json={"client_msg_id": str(uuid.uuid4()), "kind": "text", "body": "valid"},
+        headers=headers,
+    )
+    assert r_ok.status_code == 201
+
+    # 3. Revoking the device makes both send and /v1/ws-ticket return 401
+    conn.execute("UPDATE devices SET revoked_at = now() WHERE user_id = %s", (alice_id,))
+    conn.commit()
+
+    r_revoked_send = client.post(
+        f"/v1/conversations/{conv_id}/messages",
+        json={"client_msg_id": str(uuid.uuid4()), "kind": "text", "body": "after revoke"},
+        headers=headers,
+    )
+    assert r_revoked_send.status_code == 401
+
+    r_revoked_ticket = client.post("/v1/ws-ticket", headers=headers)
+    assert r_revoked_ticket.status_code == 401

@@ -1,9 +1,9 @@
-"""Security conformance test suite verifying rejection of unauthenticated users and IDOR attacks.
+"""Security conformance test suite verifying real JWT authentication, device revocation, and IDOR prevention.
 
 Covers:
 1. redeem_ws_ticket:
    - Arbitrary string of 16+ characters is rejected.
-   - test:<user_id>:<tenant_id> is rejected outside ENVIRONMENT=local.
+   - Legacy test:<user_id>:<tenant_id> dev ticket is rejected in all environments.
    - Tickets created by POST /v1/ws-ticket in Valkey are accepted.
    - Single-use invariant (Plan D-5): Second redemption attempt is rejected.
 2. WebSocket membership enforcement (Plan I4 & section 9.1 IDOR prevention):
@@ -14,23 +14,21 @@ Covers:
    - ack frame from non-member is rejected with FORBIDDEN and socket not added.
    - typing frame from non-member is rejected with FORBIDDEN, not broadcast, socket not added.
    - Cross-conversation eavesdropping (IDOR) is completely prevented.
-3. get_current_user dev authentication stub:
-   - App refuses to start outside ENVIRONMENT=local (RuntimeError on lifespan startup).
-   - get_current_user raises 401 Unauthorized outside ENVIRONMENT=local.
-   - In ENVIRONMENT=local, dev stub works with default user, Bearer <uuid>, and X-User-Id.
+3. Real JWT authentication & device session checks:
+   - Old dev headers (no header, X-User-Id, Bearer <uuid>) are rejected with 401.
+   - Token for a revoked device is rejected with 401 on send and on POST /v1/ws-ticket.
+   - Cross-tenant and unauthorized device revocations are rejected (404 / 403).
 """
 
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pytest
 
 from app.config import settings
 from app.main import app
-from app.messaging.router import get_current_user
 from app.ws.router import redeem_ws_ticket
-from tests.helpers import seed_chat
+from tests.helpers import auth_headers, seed_chat
 
 client = TestClient(app)
 
@@ -40,6 +38,13 @@ def use_test_db(db_url, monkeypatch):
     monkeypatch.setattr(settings, "database_url", db_url)
 
 
+def _get_ws_ticket(chat: dict, who: str = "bob", headers: dict | None = None) -> str:
+    hdrs = headers if headers is not None else auth_headers(chat, who)
+    r = client.post("/v1/ws-ticket", headers=hdrs)
+    assert r.status_code == 200
+    return r.json()["ticket"]
+
+
 # =============================================================================
 # 1. WebSocket Ticket Security Tests
 # =============================================================================
@@ -47,12 +52,10 @@ def use_test_db(db_url, monkeypatch):
 
 def test_redeem_ws_ticket_rejects_arbitrary_16_char_ticket():
     """Any arbitrary ticket >= 16 characters or wstk_ format without Valkey entry is rejected."""
-    # Arbitrary strings must be rejected
     assert redeem_ws_ticket("a" * 16) is None
     assert redeem_ws_ticket("wstk_randomstring1234567890") is None
     assert redeem_ws_ticket("random_ticket_not_in_valkey") is None
 
-    # Connecting over WebSocket with arbitrary ticket receives INVALID_TICKET error
     with client.websocket_connect("/v1/ws") as ws:
         ws.send_json({"type": "hello", "ticket": "arbitrary_long_ticket_123456"})
         err = ws.receive_json()
@@ -60,24 +63,16 @@ def test_redeem_ws_ticket_rejects_arbitrary_16_char_ticket():
         assert err["code"] == "INVALID_TICKET"
 
 
-def test_redeem_ws_ticket_rejects_dev_ticket_outside_local(monkeypatch):
-    """Dev tickets (test:<user>:<tenant>) are strictly rejected outside ENVIRONMENT=local."""
+def test_redeem_ws_ticket_rejects_dev_ticket_in_all_environments(monkeypatch):
+    """Legacy dev tickets (test:<user>:<tenant>) are rejected in all environments including local."""
     uid = uuid4()
     tid = uuid4()
     dev_ticket = f"test:{uid}:{tid}"
 
-    # In local environment, dev tickets work
-    monkeypatch.setattr(settings, "environment", "local")
-    user_local = redeem_ws_ticket(dev_ticket)
-    assert user_local is not None
-    assert user_local.id == uid
-
-    # In production or staging, dev tickets are rejected
-    for env in ("production", "staging", "testing"):
+    for env in ("local", "production", "staging", "testing"):
         monkeypatch.setattr(settings, "environment", env)
         assert redeem_ws_ticket(dev_ticket) is None
 
-        # Connecting over WebSocket is rejected with INVALID_TICKET
         with client.websocket_connect("/v1/ws") as ws:
             ws.send_json({"type": "hello", "ticket": dev_ticket})
             err = ws.receive_json()
@@ -89,11 +84,7 @@ def test_ws_ticket_valkey_lifecycle_and_single_use(conn):
     """Tickets issued via POST /v1/ws-ticket pass, and cannot be reused (single-use Plan D-5)."""
     s = seed_chat(conn)
     bob_id = s["bob"]
-    tenant_id = s["tenant"]
-    headers = {
-        "Authorization": f"Bearer {bob_id}",
-        "X-Tenant-Id": str(tenant_id),
-    }
+    headers = auth_headers(s, "bob")
 
     # 1. Request ticket via POST /v1/ws-ticket
     resp = client.post("/v1/ws-ticket", headers=headers)
@@ -128,9 +119,8 @@ def test_subscribe_frame_rejects_non_member_and_prevents_idor(conn):
     """A user cannot subscribe to a conversation they are not a member of (IDOR prevention)."""
     s = seed_chat(conn)
     conv_id = s["conv"]
-    alice_id = s["alice"]
-    carol_id = s["carol"]  # Carol is in tenant but NOT in conv_id
-    ticket_carol = f"test:{carol_id}:{s['tenant']}"
+    ticket_carol = _get_ws_ticket(s, "carol")
+    headers_alice = auth_headers(s, "alice")
 
     with client.websocket_connect("/v1/ws") as ws_carol:
         ws_carol.send_json({"type": "hello", "ticket": ticket_carol})
@@ -155,7 +145,7 @@ def test_subscribe_frame_rejects_non_member_and_prevents_idor(conn):
         r = client.post(
             f"/v1/conversations/{conv_id}/messages",
             json={"client_msg_id": str(uuid4()), "kind": "text", "body": msg_body},
-            headers={"Authorization": f"Bearer {alice_id}"},
+            headers=headers_alice,
         )
         assert r.status_code == 201
 
@@ -170,7 +160,7 @@ def test_subscribe_frame_rejects_user_who_left_conversation(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
     bob_id = s["bob"]
-    ticket_bob = f"test:{bob_id}:{s['tenant']}"
+    ticket_bob = _get_ws_ticket(s, "bob")
 
     # Bob leaves the conversation
     conn.execute(
@@ -201,7 +191,7 @@ def test_subscribe_frame_rejects_removed_tenant_member(conn):
     conv_id = s["conv"]
     bob_id = s["bob"]
     tenant_id = s["tenant"]
-    ticket_bob = f"test:{bob_id}:{tenant_id}"
+    ticket_bob = _get_ws_ticket(s, "bob")
 
     # Bob removed from tenant
     conn.execute(
@@ -230,7 +220,7 @@ def test_subscribe_frame_rejects_inactive_user(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
     bob_id = s["bob"]
-    ticket_bob = f"test:{bob_id}:{s['tenant']}"
+    ticket_bob = _get_ws_ticket(s, "bob")
 
     # Bob suspended
     conn.execute(
@@ -258,8 +248,7 @@ def test_ack_frame_rejects_non_member(conn):
     """An ack frame from a non-member is rejected with FORBIDDEN and does not subscribe."""
     s = seed_chat(conn)
     conv_id = s["conv"]
-    carol_id = s["carol"]  # Carol not in conv_id
-    ticket_carol = f"test:{carol_id}:{s['tenant']}"
+    ticket_carol = _get_ws_ticket(s, "carol")
 
     with client.websocket_connect("/v1/ws") as ws_carol:
         ws_carol.send_json({"type": "hello", "ticket": ticket_carol})
@@ -284,10 +273,8 @@ def test_typing_frame_rejects_non_member(conn):
     """A typing frame from a non-member is rejected and not broadcast."""
     s = seed_chat(conn)
     conv_id = s["conv"]
-    bob_id = s["bob"]
-    carol_id = s["carol"]
-    ticket_bob = f"test:{bob_id}:{s['tenant']}"
-    ticket_carol = f"test:{carol_id}:{s['tenant']}"
+    ticket_bob = _get_ws_ticket(s, "bob")
+    ticket_carol = _get_ws_ticket(s, "carol")
 
     with client.websocket_connect("/v1/ws") as ws_bob:
         ws_bob.send_json({"type": "hello", "ticket": ticket_bob})
@@ -316,92 +303,112 @@ def test_typing_frame_rejects_non_member(conn):
 
 
 # =============================================================================
-# 3. get_current_user Stub & Environment Security Tests
+# 3. Real Bearer Authentication & Revoked Device Security Tests
 # =============================================================================
 
 
-def test_app_refuses_to_start_outside_local_environment(monkeypatch):
-    """FastAPI application refuses to start outside ENVIRONMENT=local until BE-2 lands."""
-    for non_local_env in ("production", "staging", "testing"):
-        monkeypatch.setattr(settings, "environment", non_local_env)
+def test_legacy_stub_headers_and_unauthenticated_requests_get_401(conn):
+    """Old dev headers (X-User-Id, Bearer <uuid>, no header) are rejected with 401."""
+    s = seed_chat(conn)
+    conv_id = s["conv"]
+    alice_id = s["alice"]
+    tenant_id = s["tenant"]
 
-        with pytest.raises(RuntimeError, match="Refusing to start with dev authentication stub"):
-            with TestClient(app):
-                pass
+    invalid_header_sets = [
+        {},
+        {"X-User-Id": str(alice_id)},
+        {
+            "X-User-Id": str(alice_id),
+            "X-Tenant-Id": str(tenant_id),
+            "X-Device-Id": str(uuid4()),
+        },
+        {"Authorization": f"Bearer {alice_id}"},
+    ]
 
+    for hdrs in invalid_header_sets:
+        r_send = client.post(
+            f"/v1/conversations/{conv_id}/messages",
+            json={"client_msg_id": str(uuid4()), "kind": "text", "body": "unauthorized"},
+            headers=hdrs,
+        )
+        assert r_send.status_code == 401
 
-def test_get_current_user_rejects_outside_local_environment(monkeypatch):
-    """Direct invocation or endpoint access to get_current_user outside local raises 401."""
-    monkeypatch.setattr(settings, "environment", "production")
+        r_sync = client.get("/v1/sync/conversations", headers=hdrs)
+        assert r_sync.status_code == 401
 
-    # Direct invocation raises HTTPException 401
-    with pytest.raises(HTTPException) as exc_info:
-        get_current_user()
-    assert exc_info.value.status_code == 401
-    assert "ENVIRONMENT=local" in exc_info.value.detail
+        r_hist = client.get(f"/v1/conversations/{conv_id}/messages", headers=hdrs)
+        assert r_hist.status_code == 401
 
-    # Endpoint calling get_current_user receives 401
-    resp = client.get("/v1/sync/conversations")
-    assert resp.status_code == 401
-    assert "ENVIRONMENT=local" in resp.json()["detail"]
+        r_del = client.delete(f"/v1/conversations/{conv_id}/messages/1", headers=hdrs)
+        assert r_del.status_code == 401
 
-
-def test_get_current_user_works_in_local_environment(monkeypatch):
-    """In ENVIRONMENT=local, dev stub returns default user or honors Bearer and X-User-Id."""
-    monkeypatch.setattr(settings, "environment", "local")
-
-    # 1. No header -> default user
-    user_default = get_current_user()
-    assert user_default.id == UUID("0192df78-0000-7000-8000-000000000001")
-
-    # 2. Bearer <uuid> -> uses uuid
-    custom_uid = uuid4()
-    user_bearer = get_current_user(authorization=f"Bearer {custom_uid}")
-    assert user_bearer.id == custom_uid
-
-    # 3. X-User-Id -> uses uuid
-    custom_uid_2 = uuid4()
-    user_header = get_current_user(x_user_id=str(custom_uid_2))
-    assert user_header.id == custom_uid_2
+        r_ticket = client.post("/v1/ws-ticket", headers=hdrs)
+        assert r_ticket.status_code == 401
 
 
-def test_revoke_device_rejects_unauthenticated_and_other_user(conn, monkeypatch):
+def test_revoked_device_token_gets_401_on_send_and_ws_ticket(conn):
+    """A JWT token belonging to a revoked device is rejected with 401 on send and /v1/ws-ticket."""
+    s = seed_chat(conn)
+    conv_id = s["conv"]
+    alice_id = s["alice"]
+    headers_alice = auth_headers(s, "alice")
+
+    # 1. While device is active, send and ws-ticket succeed
+    r_ok = client.post(
+        f"/v1/conversations/{conv_id}/messages",
+        json={"client_msg_id": str(uuid4()), "kind": "text", "body": "before revoke"},
+        headers=headers_alice,
+    )
+    assert r_ok.status_code == 201
+
+    r_ticket_ok = client.post("/v1/ws-ticket", headers=headers_alice)
+    assert r_ticket_ok.status_code == 200
+
+    # 2. Revoke Alice's device in the database
+    conn.execute(
+        "UPDATE devices SET revoked_at = now() WHERE user_id = %s",
+        (alice_id,),
+    )
+    conn.commit()
+
+    # 3. Send with token for revoked device -> 401
+    r_send_revoked = client.post(
+        f"/v1/conversations/{conv_id}/messages",
+        json={"client_msg_id": str(uuid4()), "kind": "text", "body": "after revoke"},
+        headers=headers_alice,
+    )
+    assert r_send_revoked.status_code == 401
+
+    # 4. Request /v1/ws-ticket with token for revoked device -> 401
+    r_ticket_revoked = client.post("/v1/ws-ticket", headers=headers_alice)
+    assert r_ticket_revoked.status_code == 401
+
+
+def test_revoke_device_rejects_unauthenticated_and_other_user(conn):
     """POST /v1/devices/{device_id}/revoke requires authentication, device ownership, or admin role."""
     s = seed_chat(conn)
     alice_id = s["alice"]
-    bob_id = s["bob"]
-    tenant_id = s["tenant"]
+    headers_alice = auth_headers(s, "alice")
+    headers_bob = auth_headers(s, "bob")
 
     alice_device = uuid4()
-    # Insert Alice's device into devices table
     conn.execute(
-        "INSERT INTO devices (id, user_id, platform, push_token, refresh_hash, refresh_family) VALUES (%s, %s, %s, %s, %s, %s)",
+        "INSERT INTO devices (id, user_id, platform, push_token, refresh_hash, refresh_family) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
         (alice_device, alice_id, "android", "push_token_alice", b"hash_alice", uuid4()),
     )
     conn.commit()
 
-    # 1. Unauthenticated in production environment is rejected with 401
-    monkeypatch.setattr(settings, "environment", "production")
+    # 1. Unauthenticated is rejected with 401
     r_unauth = client.post(f"/v1/devices/{alice_device}/revoke")
     assert r_unauth.status_code == 401
 
-    # Restore local environment
-    monkeypatch.setattr(settings, "environment", "local")
-
     # 2. Bob (non-owner, member role) attempts to revoke Alice's device -> 403 Forbidden
-    headers_bob = {
-        "Authorization": f"Bearer {bob_id}",
-        "X-Tenant-Id": str(tenant_id),
-    }
     r_bob = client.post(f"/v1/devices/{alice_device}/revoke", headers=headers_bob)
     assert r_bob.status_code == 403
     assert "Not authorized" in r_bob.json()["detail"]
 
     # 3. Alice (device owner) revokes her own device -> 200 OK
-    headers_alice = {
-        "Authorization": f"Bearer {alice_id}",
-        "X-Tenant-Id": str(tenant_id),
-    }
     r_alice = client.post(f"/v1/devices/{alice_device}/revoke", headers=headers_alice)
     assert r_alice.status_code == 200
     assert r_alice.json()["revoked"] is True
@@ -411,10 +418,9 @@ def test_live_socket_drops_unsubscribed_when_user_leaves_conversation(conn):
     """Connected WebSocket stops receiving live frames after user leaves conversation (Invariant I4)."""
     s = seed_chat(conn)
     conv_id = s["conv"]
-    alice_id = s["alice"]
     bob_id = s["bob"]
-    ticket_bob = f"test:{bob_id}:{s['tenant']}"
-    headers_alice = {"Authorization": f"Bearer {alice_id}"}
+    ticket_bob = _get_ws_ticket(s, "bob")
+    headers_alice = auth_headers(s, "alice")
 
     with client.websocket_connect("/v1/ws") as ws_bob:
         ws_bob.send_json({"type": "hello", "ticket": ticket_bob})
@@ -462,7 +468,7 @@ def test_sync_and_get_messages_rejects_removed_tenant_member_and_inactive_user(c
     conv_id = s["conv"]
     bob_id = s["bob"]
     tenant_id = s["tenant"]
-    headers_bob = {"Authorization": f"Bearer {bob_id}"}
+    headers_bob = auth_headers(s, "bob")
 
     # 1. Bob removed from tenant
     conn.execute(
@@ -474,7 +480,7 @@ def test_sync_and_get_messages_rejects_removed_tenant_member_and_inactive_user(c
     # GET /messages returns 403
     r_msg = client.get(f"/v1/conversations/{conv_id}/messages", headers=headers_bob)
     assert r_msg.status_code == 403
-    assert "removed from the tenant" in r_msg.json()["detail"]
+    assert "not active" in r_msg.json()["detail"]
 
     # GET /sync/conversations excludes conv_id
     r_sync = client.get("/v1/sync/conversations", headers=headers_bob)
@@ -545,10 +551,7 @@ def test_revoke_device_cross_tenant_admin_and_missing_device_returns_404(conn):
     )
     conn.commit()
 
-    headers_admin_a = {
-        "Authorization": f"Bearer {admin_a}",
-        "X-Tenant-Id": str(tenant_a),
-    }
+    headers_admin_a = auth_headers(s_a, "alice")
 
     # 1. Admin of Tenant A attempts to revoke a device owned by user in Tenant B -> 404
     r_cross = client.post(f"/v1/devices/{bob_b_device}/revoke", headers=headers_admin_a)

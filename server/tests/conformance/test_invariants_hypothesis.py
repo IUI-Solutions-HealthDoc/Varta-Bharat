@@ -20,7 +20,7 @@ import pytest
 from app.config import settings
 from app.main import app
 from app.send import NotAllowed, send_message, send_tombstone
-from tests.helpers import seed_chat
+from tests.helpers import auth_headers, seed_chat
 
 client = TestClient(app)
 
@@ -230,7 +230,7 @@ def test_property_i4_visibility_boundary_never_leaks_prior_messages(
         conv_id = s["conv"]
         alice_id = s["alice"]
         bob_id = s["bob"]
-        headers_bob = {"Authorization": f"Bearer {bob_id}"}
+        headers_bob = auth_headers(s, "bob")
 
         # Alice sends messages 1..num_messages
         for i in range(num_messages):

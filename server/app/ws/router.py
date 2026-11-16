@@ -24,10 +24,9 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 
-from app.config import settings
+from app.auth.dependencies import AuthUser, current_user
 from app.core.db import get_conn
 from app.core.valkey import get_valkey
-from app.messaging.router import AuthUser, get_current_user
 from app.ws.schemas import (
     AckFrame,
     ErrorFrame,
@@ -69,7 +68,6 @@ _thread_init_lock = threading.Lock()
 
 def redeem_ws_ticket(ticket: str) -> WsUser | None:
     """Validate and redeem a single-use WebSocket ticket (Plan D-5 / Member 2 contract)."""
-    # 1. Valkey single-use ticket check using shared client
     try:
         client = get_valkey()
         key = f"ws_ticket:{ticket}"
@@ -88,18 +86,6 @@ def redeem_ws_ticket(ticket: str) -> WsUser | None:
             )
     except Exception as exc:  # noqa: BLE001
         log.debug("Valkey ticket lookup failed: %s", exc)
-
-    # 2. Test / Dev ticket format: test:<user_id>:<tenant_id> or test:<user_id>:<tenant_id>:<device_id>
-    # Allowed ONLY when settings.environment == "local"
-    if settings.environment == "local" and ticket.startswith("test:"):
-        parts = ticket.split(":")
-        try:
-            user_id = UUID(parts[1]) if len(parts) > 1 else uuid4()
-            tenant_id = UUID(parts[2]) if len(parts) > 2 else uuid4()
-            device_id = UUID(parts[3]) if len(parts) > 3 else uuid4()
-            return WsUser(id=user_id, tenant_id=tenant_id, device_id=device_id)
-        except (ValueError, IndexError):
-            return None
 
     return None
 
@@ -194,7 +180,7 @@ def publish_valkey_channel(channel: str, payload: dict) -> None:
     description="Issues a single-use ticket stored in Valkey with a 30s TTL for WebSocket authentication.",
 )
 def create_ws_ticket_endpoint(
-    user: Annotated[AuthUser, Depends(get_current_user)],
+    user: Annotated[AuthUser, Depends(current_user)],
 ) -> WsTicketResponse:
     ticket = f"wstk_{secrets.token_hex(16)}"
     key = f"ws_ticket:{ticket}"
@@ -417,7 +403,7 @@ def _check_device_revoke_auth_and_mark(d_id: UUID, u_id: UUID, t_id: UUID, u_dev
 )
 async def revoke_device_endpoint(
     device_id: UUID,
-    user: Annotated[AuthUser, Depends(get_current_user)],
+    user: Annotated[AuthUser, Depends(current_user)],
     reason: str = "Device session revoked by security policy",
 ) -> dict:
     result = await asyncio.to_thread(

@@ -1,17 +1,15 @@
 from contextlib import asynccontextmanager
 import logging
-
-import psycopg
-from fastapi import FastAPI, HTTPException, Depends
-
-from app.config import settings
-from app.logging_setup import setup_logging
-from app.media.router import router as media_router
-from app.conversations.router import router as conversations_router
 from typing import Annotated
 
+from fastapi import Depends, FastAPI, HTTPException
+import psycopg
 
 from app.auth.dependencies import AuthUser, current_user
+from app.config import settings
+from app.conversations.router import router as conversations_router
+from app.logging_setup import setup_logging
+from app.media.router import router as media_router
 from app.messaging.router import router as messaging_router
 from app.moderation.router import router as moderation_router
 from app.ws.router import (
@@ -26,11 +24,6 @@ log = logging.getLogger("varta")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if settings.environment != "local":
-        raise RuntimeError(
-            f"Refusing to start with dev authentication stub in environment '{settings.environment}'. "
-            "Real auth (BE-2) is required outside ENVIRONMENT=local."
-        )
     try:
         await ensure_valkey_subscriber()
     except Exception as exc:  # noqa: BLE001
