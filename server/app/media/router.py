@@ -66,7 +66,7 @@ def create_attachment(
             "INSERT INTO attachments "
             "(tenant_id, uploader_id, object_key, mime, byte_size, idempotency_key) "
             "VALUES (%s, %s, %s, %s, %s, %s) "
-            "ON CONFLICT (uploader_id, idempotency_key) "
+            "ON CONFLICT (tenant_id, uploader_id, idempotency_key) "
             "WHERE idempotency_key IS NOT NULL AND state <> 'rejected' DO NOTHING "
             "RETURNING id",
             (user.tenant_id, user.id, key, body.mime, body.byte_size, x_idempotency_key),

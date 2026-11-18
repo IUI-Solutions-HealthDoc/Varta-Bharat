@@ -117,3 +117,20 @@ def test_idempotency_index_exists(conn):
         "SELECT 1 FROM pg_indexes WHERE indexname = 'attachments_idempotency_key_uniq'"
     ).fetchone()
     assert row is not None
+
+def test_same_user_can_reuse_a_key_in_a_second_tenant(client, conn):
+    chat, other = seed_chat(conn), seed_chat(conn)
+    conn.execute(
+        "INSERT INTO tenant_members (tenant_id, user_id, role) VALUES (%s, %s, 'member')",
+        (other["tenant"], chat["alice"]),
+    )
+    conn.commit()
+    key = uuid4()
+    first = create(client, auth_headers(chat), key)
+    in_other = auth_headers({"tenant": other["tenant"], "alice": chat["alice"]})
+    second = create(client, in_other, key)
+    retry = create(client, in_other, key)
+    assert first.status_code == second.status_code == retry.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
+    assert second.json()["id"] == retry.json()["id"]
+    assert count(conn, chat) == 2

@@ -17,7 +17,6 @@ DENY_KEYS = {
 UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
 
-
 def redact(value):
     if isinstance(value, dict):
         return {k: "[redacted]" if k.lower() in DENY_KEYS else redact(v) for k, v in value.items()}

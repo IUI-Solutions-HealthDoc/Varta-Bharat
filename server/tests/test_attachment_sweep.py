@@ -1,5 +1,7 @@
 from uuid import uuid4
 
+import psycopg
+
 from app.media.tasks import sweep_pending
 from app.worker import celery_app
 from tests.helpers import seed_chat
@@ -87,3 +89,33 @@ def test_sweep_is_scheduled_every_minute():
     entry = celery_app.conf.beat_schedule["sweep-pending-attachments"]
     assert entry["task"] == "app.media.tasks.sweep_pending_attachments"
     assert entry["schedule"] == 60.0
+
+def test_never_uploaded_rows_do_not_starve_real_uploads(conn):
+    chat, store, queued = seed_chat(conn), Store(), []
+    for _ in range(3):
+        make(conn, chat, store, age_s=7200, uploaded=False)  # old, never uploaded
+    real, _ = make(conn, chat, store, age_s=600)  # newer, really uploaded
+    for _ in range(3):
+        sweep_pending(conn, store, queued.append, batch=2)
+    assert queued == [real]
+
+
+def test_objects_are_deleted_only_after_the_expiry_is_committed(conn, db_url):
+    chat = seed_chat(conn)
+    seen = []
+
+    class Checking(Store):
+        def delete(self, key):
+            with psycopg.connect(db_url) as other:  # a separate session sees only committed rows
+                row = other.execute(
+                    "SELECT state FROM attachments WHERE object_key = %s",
+                    (key.removesuffix(".thumb"),),
+                ).fetchone()
+            seen.append(row[0])
+            super().delete(key)
+
+    with psycopg.connect(db_url, autocommit=True) as ac:
+        store = Checking()
+        make(ac, chat, store, age_s=25 * 3600)
+        assert sweep_pending(ac, store, lambda _: None) == {"expired": 1, "requeued": 0}
+    assert seen == ["rejected", "rejected"]
