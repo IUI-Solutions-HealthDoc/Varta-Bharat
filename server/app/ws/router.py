@@ -564,7 +564,7 @@ def _valkey_subscriber_worker() -> None:
             _pubsub_ready_event.set()
 
             while not _pubsub_stop_event.is_set():
-                msg = ps.get_message(ignore_subscribe_messages=True, timeout=0.5)
+                msg = ps.get_message(ignore_subscribe_messages=True, timeout=0.05)
                 if msg is not None and msg.get("type") == "pmessage":
                     _handle_valkey_message_sync(msg.get("channel", ""), msg.get("data"))
         except Exception as exc:  # noqa: BLE001
@@ -583,6 +583,9 @@ def ensure_valkey_subscriber_thread() -> None:
     """Ensure the background Valkey subscriber daemon thread is running."""
     global _pubsub_thread
     with _thread_init_lock:
+        if _pubsub_stop_event.is_set() and _pubsub_thread is not None and _pubsub_thread.is_alive():
+            _pubsub_thread.join(timeout=2.0)
+            _pubsub_thread = None
         if _pubsub_thread is None or not _pubsub_thread.is_alive():
             _pubsub_stop_event.clear()
             _pubsub_ready_event.clear()
@@ -595,12 +598,22 @@ def ensure_valkey_subscriber_thread() -> None:
             _pubsub_ready_event.wait(timeout=2.0)
 
 
+def stop_valkey_subscriber_thread() -> None:
+    """Stop and join the background Valkey subscriber daemon thread."""
+    global _pubsub_thread
+    with _thread_init_lock:
+        _pubsub_stop_event.set()
+        if _pubsub_thread is not None and _pubsub_thread.is_alive():
+            _pubsub_thread.join(timeout=2.0)
+        _pubsub_thread = None
+
+
 async def ensure_valkey_subscriber() -> None:
     ensure_valkey_subscriber_thread()
 
 
 async def stop_valkey_subscriber() -> None:
-    _pubsub_stop_event.set()
+    await asyncio.to_thread(stop_valkey_subscriber_thread)
 
 
 @router.websocket("/ws")
