@@ -18,9 +18,8 @@ from fastapi import HTTPException
 import psycopg
 from psycopg.pq import TransactionStatus
 
-from app.auth.dependencies import AuthUser
+from app.auth.authorization import authorize as check_permission
 from app.auth.repository import get_conversation_access
-from app.auth.service import authorize
 from app.media.validation import AttachmentRejected, validate_attachment_for_send
 from app.moderation.blocks import blocked_between
 
@@ -99,11 +98,11 @@ def send_message(
     *,
     conversation_id: UUID,
     sender_id: UUID,
+    tenant_id: UUID,
     client_msg_id: UUID,
     kind: str = "text",
     body: str | None = None,
     attachment_id: UUID | None = None,
-    tenant_id: UUID | None = None,
     attachment_validator: Callable[
         [psycopg.Connection, UUID, UUID, UUID], None
     ] = validate_attachment_for_send,
@@ -115,8 +114,8 @@ def send_message(
     - Client kinds must be 'text' or 'media'.
     - Body length max 8000 characters.
     - Unicode NFC normalization.
-    - Active membership & tenant check via shared app.auth.service.authorize.
-    - Announcement channel admin check via shared app.auth.service.authorize.
+    - Active membership & tenant check via shared app.auth.authorization.authorize.
+    - Announcement channel admin check via shared app.auth.authorization.authorize.
     - User blocks check (sender/recipient in DMs).
     - Attachment readiness, tenant, and uploader check.
     - Gapless monotonic sequence assignment with idempotent duplicate detection.
@@ -153,8 +152,7 @@ def send_message(
             if row is None:
                 raise NotAllowed("conversation not found")
             seq, conv_kind, conv_tenant_id = row
-            effective_tenant_id = tenant_id if tenant_id is not None else conv_tenant_id
-            if effective_tenant_id != conv_tenant_id:
+            if tenant_id != conv_tenant_id:
                 raise NotAllowed("conversation not found")
 
             # Step 2: Retry of an earlier send? Return the original; the rollback undoes step 1.
@@ -167,13 +165,19 @@ def send_message(
                 raise _Duplicate(dup)
 
             # Step 3: Permission checks
-            # 3a & 3b. Active tenant/conversation membership & announcement channel role via shared authorize()
+            # 3a & 3b. Active tenant/conversation membership & announcement channel role
+            access = get_conversation_access(
+                conn=conn,
+                user_id=sender_id,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+            )
             try:
-                authorize(
-                    conn,
-                    AuthUser(id=sender_id, tenant_id=effective_tenant_id, device_id=sender_id),
-                    "send",
-                    conversation_id,
+                check_permission(
+                    user=tenant_id,
+                    action="send",
+                    conversation_id=conversation_id,
+                    access=access,
                 )
             except HTTPException as exc:
                 if exc.status_code == 404:
@@ -193,7 +197,7 @@ def send_message(
             # 3d. Attachment validation
             if attachment_id is not None:
                 try:
-                    attachment_validator(conn, attachment_id, sender_id, effective_tenant_id)
+                    attachment_validator(conn, attachment_id, sender_id, tenant_id)
                 except AttachmentRejected as exc:
                     raise NotAllowed(f"attachment is not ready: {exc.reason}") from exc
 
@@ -231,9 +235,9 @@ def send_tombstone(
     *,
     conversation_id: UUID,
     actor_id: UUID,
+    tenant_id: UUID,
     target_seq: int,
     client_msg_id: UUID | None = None,
-    tenant_id: UUID | None = None,
 ) -> Sent:
     """Tombstone message deletion transaction (BE-1: P2 Polish & Robustness).
 
@@ -265,8 +269,7 @@ def send_tombstone(
             if row is None:
                 raise NotAllowed("conversation not found")
             seq, conv_tenant_id = row
-            effective_tenant_id = tenant_id if tenant_id is not None else conv_tenant_id
-            if effective_tenant_id != conv_tenant_id:
+            if tenant_id != conv_tenant_id:
                 raise NotAllowed("conversation not found")
 
             # Step 2: Check idempotency for client_msg_id
@@ -278,21 +281,25 @@ def send_tombstone(
             if dup is not None:
                 raise _Duplicate(dup)
 
-            # Step 3: Verify permissions via shared auth service
-            auth_user = AuthUser(id=actor_id, tenant_id=effective_tenant_id, device_id=actor_id)
+            # Step 3: Load access once and verify permissions
+            access = get_conversation_access(
+                conn=conn,
+                user_id=actor_id,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+            )
             try:
-                authorize(conn, auth_user, "read", conversation_id)
+                check_permission(
+                    user=tenant_id,
+                    action="read",
+                    conversation_id=conversation_id,
+                    access=access,
+                )
             except HTTPException as exc:
                 if exc.status_code == 404:
                     raise NotAllowed("conversation not found") from exc
                 raise NotAllowed(str(exc.detail)) from exc
 
-            access = get_conversation_access(
-                conn=conn,
-                user_id=actor_id,
-                tenant_id=effective_tenant_id,
-                conversation_id=conversation_id,
-            )
             if access is None or access.member_role is None or access.left_at is not None:
                 raise NotAllowed("not an active member")
 

@@ -26,16 +26,23 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.config import settings
+from app.core import db
 from app.main import app
 from app.ws.router import redeem_ws_ticket
 from tests.helpers import auth_headers, seed_chat
 
-client = TestClient(app)
+client: TestClient = None  # type: ignore[assignment]
 
 
 @pytest.fixture(autouse=True)
 def use_test_db(db_url, monkeypatch):
+    global client
     monkeypatch.setattr(settings, "database_url", db_url)
+    db.close_pool()
+    with TestClient(app) as c:
+        client = c
+        yield c
+    db.close_pool()
 
 
 def _get_ws_ticket(chat: dict, who: str = "bob", headers: dict | None = None) -> str:

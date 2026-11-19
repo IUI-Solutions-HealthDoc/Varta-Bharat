@@ -27,15 +27,16 @@ class ConversationAccess:
 
 
 def authorize(
-    user: AuthUser,
+    user: AuthUser | UUID,
     action: Action,
     conversation_id: UUID,
     access: ConversationAccess | None,
 ) -> None:
     """Enforce tenant, account, membership and role permissions."""
+    tenant_id = user.tenant_id if isinstance(user, AuthUser) else user
 
     # 1. Hide conversations that do not exist or belong to another tenant.
-    if access is None or user.tenant_id != access.tenant_id:
+    if access is None or tenant_id != access.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found",

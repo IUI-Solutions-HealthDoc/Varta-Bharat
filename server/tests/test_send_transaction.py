@@ -1,9 +1,13 @@
-import uuid
 from concurrent.futures import ThreadPoolExecutor
+import uuid
 
+from fastapi.testclient import TestClient
 import psycopg
 import pytest
 
+from app.config import settings
+from app.core import db
+from app.main import app
 from app.send import NotAllowed, send_message
 from tests.helpers import auth_headers, seed_chat
 
@@ -25,6 +29,7 @@ def test_seq_is_gapless_and_increasing(conn):
             conn,
             conversation_id=s["conv"],
             sender_id=s["alice"],
+            tenant_id=s["tenant"],
             client_msg_id=uuid.uuid4(),
             body=f"m{i}",
         ).seq
@@ -37,13 +42,28 @@ def test_retry_returns_original_and_leaves_no_gap(conn):
     s = seed_chat(conn)
     cmid = uuid.uuid4()
     first = send_message(
-        conn, conversation_id=s["conv"], sender_id=s["alice"], client_msg_id=cmid, body="hi"
+        conn,
+        conversation_id=s["conv"],
+        sender_id=s["alice"],
+        tenant_id=s["tenant"],
+        client_msg_id=cmid,
+        body="hi",
     )
     again = send_message(
-        conn, conversation_id=s["conv"], sender_id=s["alice"], client_msg_id=cmid, body="hi"
+        conn,
+        conversation_id=s["conv"],
+        sender_id=s["alice"],
+        tenant_id=s["tenant"],
+        client_msg_id=cmid,
+        body="hi",
     )
     nxt = send_message(
-        conn, conversation_id=s["conv"], sender_id=s["alice"], client_msg_id=uuid.uuid4(), body="2"
+        conn,
+        conversation_id=s["conv"],
+        sender_id=s["alice"],
+        tenant_id=s["tenant"],
+        client_msg_id=uuid.uuid4(),
+        body="2",
     )
     assert (first.seq, first.duplicate) == (1, False)
     assert (again.seq, again.id, again.duplicate) == (1, first.id, True)
@@ -61,6 +81,7 @@ def test_100_concurrent_sends_are_gapless(conn, db_url):
                 c,
                 conversation_id=s["conv"],
                 sender_id=s["alice" if i % 2 else "bob"],
+                tenant_id=s["tenant"],
                 client_msg_id=uuid.uuid4(),
                 body=f"m{i}",
             ).seq
@@ -79,7 +100,12 @@ def test_concurrent_retries_produce_one_message(conn, db_url):
     def work(_):
         with psycopg.connect(db_url) as c:
             return send_message(
-                c, conversation_id=s["conv"], sender_id=s["alice"], client_msg_id=cmid, body="same"
+                c,
+                conversation_id=s["conv"],
+                sender_id=s["alice"],
+                tenant_id=s["tenant"],
+                client_msg_id=cmid,
+                body="same",
             ).seq
 
     with ThreadPoolExecutor(max_workers=10) as ex:
@@ -96,6 +122,21 @@ def test_non_member_rejected_without_burning_a_seq(conn):
             conn,
             conversation_id=s["conv"],
             sender_id=s["carol"],
+            tenant_id=s["tenant"],
+            client_msg_id=uuid.uuid4(),
+            body="hi",
+        )
+    assert _last_seq(conn, s["conv"]) == 0
+
+
+def test_cross_tenant_send_rejected_without_burning_a_seq(conn):
+    s = seed_chat(conn)
+    with pytest.raises(NotAllowed, match="conversation not found"):
+        send_message(
+            conn,
+            conversation_id=s["conv"],
+            sender_id=s["alice"],
+            tenant_id=uuid.uuid4(),
             client_msg_id=uuid.uuid4(),
             body="hi",
         )
@@ -114,6 +155,7 @@ def test_member_who_left_is_rejected(conn):
             conn,
             conversation_id=s["conv"],
             sender_id=s["bob"],
+            tenant_id=s["tenant"],
             client_msg_id=uuid.uuid4(),
             body="hi",
         )
@@ -127,6 +169,7 @@ def test_only_admins_post_in_announcement_channels(conn):
             conn,
             conversation_id=s["conv"],
             sender_id=s["bob"],
+            tenant_id=s["tenant"],
             client_msg_id=uuid.uuid4(),
             body="hi",
         )
@@ -134,6 +177,7 @@ def test_only_admins_post_in_announcement_channels(conn):
         conn,
         conversation_id=s["conv"],
         sender_id=s["alice"],
+        tenant_id=s["tenant"],
         client_msg_id=uuid.uuid4(),
         body="notice",
     )
@@ -146,6 +190,7 @@ def test_body_is_normalised_to_nfc(conn):
         conn,
         conversation_id=s["conv"],
         sender_id=s["alice"],
+        tenant_id=s["tenant"],
         client_msg_id=uuid.uuid4(),
         body="e\u0301",
     )  # e + combining acute
@@ -187,6 +232,7 @@ def test_dm_blocked_sender_or_recipient_rejected(conn):
             conn,
             conversation_id=dm_id,
             sender_id=s["alice"],
+            tenant_id=s["tenant"],
             client_msg_id=uuid.uuid4(),
             body="hello bob",
         )
@@ -200,6 +246,7 @@ def test_client_cannot_send_system_kind(conn):
             conn,
             conversation_id=s["conv"],
             sender_id=s["alice"],
+            tenant_id=s["tenant"],
             client_msg_id=uuid.uuid4(),
             kind="system",
             body="system notice",
@@ -214,6 +261,7 @@ def test_body_length_exceeding_8000_rejected(conn):
             conn,
             conversation_id=s["conv"],
             sender_id=s["alice"],
+            tenant_id=s["tenant"],
             client_msg_id=uuid.uuid4(),
             body="a" * 8001,
         )
@@ -228,6 +276,7 @@ def test_open_transaction_rejected_by_send_message(conn):
             conn,
             conversation_id=s["conv"],
             sender_id=s["alice"],
+            tenant_id=s["tenant"],
             client_msg_id=uuid.uuid4(),
             body="msg",
         )
@@ -249,6 +298,7 @@ def test_attachment_validation_checks(conn):
             conn,
             conversation_id=s["conv"],
             sender_id=s["alice"],
+            tenant_id=s["tenant"],
             client_msg_id=uuid.uuid4(),
             kind="media",
             attachment_id=att_id,
@@ -262,6 +312,7 @@ def test_attachment_validation_checks(conn):
             conn,
             conversation_id=s["conv"],
             sender_id=s["bob"],
+            tenant_id=s["tenant"],
             client_msg_id=uuid.uuid4(),
             kind="media",
             attachment_id=att_id,
@@ -272,6 +323,7 @@ def test_attachment_validation_checks(conn):
         conn,
         conversation_id=s["conv"],
         sender_id=s["alice"],
+        tenant_id=s["tenant"],
         client_msg_id=uuid.uuid4(),
         kind="media",
         attachment_id=att_id,
@@ -286,6 +338,7 @@ def test_body_with_nul_byte_rejected(conn):
             conn,
             conversation_id=s["conv"],
             sender_id=s["alice"],
+            tenant_id=s["tenant"],
             client_msg_id=uuid.uuid4(),
             body="hello\x00world",
         )
@@ -293,49 +346,48 @@ def test_body_with_nul_byte_rejected(conn):
 
 
 def test_send_endpoint_requires_real_bearer_auth_and_active_device(conn, db_url, monkeypatch):
-    from fastapi.testclient import TestClient
-
-    from app.config import settings
-    from app.main import app
-
     monkeypatch.setattr(settings, "database_url", db_url)
-    client = TestClient(app)
-    s = seed_chat(conn)
-    conv_id = s["conv"]
-    alice_id = s["alice"]
+    db.close_pool()
+    try:
+        with TestClient(app) as client:
+            s = seed_chat(conn)
+            conv_id = s["conv"]
+            alice_id = s["alice"]
 
-    # 1. Old stub headers (no header, X-User-Id, Bearer <uuid>) return 401
-    for bad_headers in (
-        {},
-        {"X-User-Id": str(alice_id)},
-        {"Authorization": f"Bearer {alice_id}"},
-    ):
-        r = client.post(
-            f"/v1/conversations/{conv_id}/messages",
-            json={"client_msg_id": str(uuid.uuid4()), "kind": "text", "body": "hi"},
-            headers=bad_headers,
-        )
-        assert r.status_code == 401
+            # 1. Old stub headers (no header, X-User-Id, Bearer <uuid>) return 401
+            for bad_headers in (
+                {},
+                {"X-User-Id": str(alice_id)},
+                {"Authorization": f"Bearer {alice_id}"},
+            ):
+                r = client.post(
+                    f"/v1/conversations/{conv_id}/messages",
+                    json={"client_msg_id": str(uuid.uuid4()), "kind": "text", "body": "hi"},
+                    headers=bad_headers,
+                )
+                assert r.status_code == 401
 
-    # 2. Valid bearer token from auth_headers succeeds
-    headers = auth_headers(s, "alice")
-    r_ok = client.post(
-        f"/v1/conversations/{conv_id}/messages",
-        json={"client_msg_id": str(uuid.uuid4()), "kind": "text", "body": "valid"},
-        headers=headers,
-    )
-    assert r_ok.status_code == 201
+            # 2. Valid bearer token from auth_headers succeeds
+            headers = auth_headers(s, "alice")
+            r_ok = client.post(
+                f"/v1/conversations/{conv_id}/messages",
+                json={"client_msg_id": str(uuid.uuid4()), "kind": "text", "body": "valid"},
+                headers=headers,
+            )
+            assert r_ok.status_code == 201
 
-    # 3. Revoking the device makes both send and /v1/ws-ticket return 401
-    conn.execute("UPDATE devices SET revoked_at = now() WHERE user_id = %s", (alice_id,))
-    conn.commit()
+            # 3. Revoking the device makes both send and /v1/ws-ticket return 401
+            conn.execute("UPDATE devices SET revoked_at = now() WHERE user_id = %s", (alice_id,))
+            conn.commit()
 
-    r_revoked_send = client.post(
-        f"/v1/conversations/{conv_id}/messages",
-        json={"client_msg_id": str(uuid.uuid4()), "kind": "text", "body": "after revoke"},
-        headers=headers,
-    )
-    assert r_revoked_send.status_code == 401
+            r_revoked_send = client.post(
+                f"/v1/conversations/{conv_id}/messages",
+                json={"client_msg_id": str(uuid.uuid4()), "kind": "text", "body": "after revoke"},
+                headers=headers,
+            )
+            assert r_revoked_send.status_code == 401
 
-    r_revoked_ticket = client.post("/v1/ws-ticket", headers=headers)
-    assert r_revoked_ticket.status_code == 401
+            r_revoked_ticket = client.post("/v1/ws-ticket", headers=headers)
+            assert r_revoked_ticket.status_code == 401
+    finally:
+        db.close_pool()

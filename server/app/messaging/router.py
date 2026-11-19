@@ -158,17 +158,15 @@ def get_messages_endpoint(
         ).fetchone()
 
         if member is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not a member of this conversation",
-            )
-
-        visible_from_seq, left_at = member
-        if left_at is not None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User has left this conversation (Invariant I4)",
-            )
+            # Non-member reading a public or announcement conversation (allowed by authorize())
+            visible_from_seq = 1
+        else:
+            visible_from_seq, left_at = member
+            if left_at is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User has left this conversation (Invariant I4)",
+                )
 
         # Invariant I4: never return seq < visible_from_seq
         effective_after = max(after, visible_from_seq - 1)

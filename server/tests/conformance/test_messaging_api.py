@@ -16,15 +16,22 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.config import settings
+from app.core import db
 from app.main import app
 from tests.helpers import auth_headers, seed_chat
 
-client = TestClient(app)
+client: TestClient = None  # type: ignore[assignment]
 
 
 @pytest.fixture(autouse=True)
 def use_test_db(db_url, monkeypatch):
+    global client
     monkeypatch.setattr(settings, "database_url", db_url)
+    db.close_pool()
+    with TestClient(app) as c:
+        client = c
+        yield c
+    db.close_pool()
 
 
 def _get_ws_ticket(chat: dict, who: str = "bob", headers: dict | None = None) -> str:
@@ -557,3 +564,25 @@ def test_valkey_channel_fanout_receipt_and_typing_and_revocation(conn):
         revoked_frame = ws_bob.receive_json()
         assert revoked_frame["type"] == "revoked"
         assert revoked_frame["reason"] == "Security token rotation"
+
+
+def test_non_member_can_read_public_conversation(conn):
+    """Any active member of the same tenant can read a public conversation (visible_from_seq = 1)."""
+    s = seed_chat(conn, conv_kind="public")
+    conv_id = s["conv"]
+    headers_alice = auth_headers(s, "alice")
+    headers_carol = auth_headers(s, "carol")  # Carol is in tenant, not in conversation_members
+
+    for i in (1, 2):
+        r = client.post(
+            f"/v1/conversations/{conv_id}/messages",
+            json={"client_msg_id": str(uuid4()), "kind": "text", "body": f"public-{i}"},
+            headers=headers_alice,
+        )
+        assert r.status_code == 201
+
+    r_carol = client.get(f"/v1/conversations/{conv_id}/messages?after=0", headers=headers_carol)
+    assert r_carol.status_code == 200
+    msgs = r_carol.json()["messages"]
+    assert [m["seq"] for m in msgs] == [1, 2]
+    assert [m["body"] for m in msgs] == ["public-1", "public-2"]
