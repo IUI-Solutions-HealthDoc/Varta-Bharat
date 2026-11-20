@@ -18,7 +18,7 @@ from fastapi import HTTPException
 import psycopg
 from psycopg.pq import TransactionStatus
 
-from app.auth.authorization import authorize as check_permission
+from app.auth.authorization import check_access
 from app.auth.repository import get_conversation_access
 from app.media.validation import AttachmentRejected, validate_attachment_for_send
 from app.moderation.blocks import blocked_between
@@ -173,8 +173,8 @@ def send_message(
                 conversation_id=conversation_id,
             )
             try:
-                check_permission(
-                    user=tenant_id,
+                check_access(
+                    tenant_id=tenant_id,
                     action="send",
                     conversation_id=conversation_id,
                     access=access,
@@ -289,8 +289,8 @@ def send_tombstone(
                 conversation_id=conversation_id,
             )
             try:
-                check_permission(
-                    user=tenant_id,
+                check_access(
+                    tenant_id=tenant_id,
                     action="read",
                     conversation_id=conversation_id,
                     access=access,

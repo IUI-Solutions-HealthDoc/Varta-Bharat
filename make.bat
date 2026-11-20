@@ -19,6 +19,11 @@ if "%TARGET%"=="up" (
     cd server && uv run ruff check .
 ) else if "%TARGET%"=="run" (
     cd server && uv run uvicorn app.main:app --reload
+) else if "%TARGET%"=="worker" (
+    rem Celery's default prefork pool does not run on Windows
+    cd server && uv run celery -A app.worker worker -l info --pool=solo
+) else if "%TARGET%"=="beat" (
+    cd server && uv run celery -A app.worker beat -l info -s .celerybeat-schedule
 ) else (
-    echo Usage: make [up^|down^|migrate^|downgrade^|test^|lint^|run]
+    echo Usage: make [up^|down^|migrate^|downgrade^|test^|lint^|run^|worker^|beat]
 )
