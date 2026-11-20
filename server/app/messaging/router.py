@@ -4,15 +4,16 @@ Implements:
 - POST /v1/conversations/{conversation_id}/messages
 - GET /v1/sync/conversations
 - GET /v1/conversations/{conversation_id}/messages
+- DELETE /v1/conversations/{conversation_id}/messages/{target_seq}
 """
 
-from dataclasses import dataclass
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 
-from app.config import settings
+from app.auth.dependencies import AuthUser, current_user
+from app.auth.service import authorize
 from app.core.db import get_conn
 from app.media.validation import AttachmentRejected
 from app.messaging.schemas import (
@@ -29,52 +30,6 @@ from app.send import NotAllowed, send_message, send_tombstone
 router = APIRouter(prefix="/v1", tags=["messaging"])
 
 
-@dataclass(frozen=True)
-class AuthUser:
-    """Represents the authenticated user context (Member 2 contract)."""
-
-    id: UUID
-    tenant_id: UUID
-    device_id: UUID
-
-
-def get_current_user(
-    authorization: Annotated[str | None, Header()] = None,
-    x_user_id: Annotated[str | None, Header()] = None,
-    x_tenant_id: Annotated[str | None, Header()] = None,
-    x_device_id: Annotated[str | None, Header()] = None,
-) -> AuthUser:
-    """Dependency extracting authenticated user context from token or headers."""
-    if settings.environment != "local":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Dev authentication stub is not permitted outside ENVIRONMENT=local until real auth (BE-2) lands",
-        )
-
-    user_id = None
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.removeprefix("Bearer ").strip()
-        try:
-            user_id = UUID(token)
-        except ValueError:
-            pass
-
-    if x_user_id and user_id is None:
-        try:
-            user_id = UUID(x_user_id)
-        except ValueError:
-            pass
-
-    if user_id is None:
-        # Default local dev user
-        user_id = UUID("0192df78-0000-7000-8000-000000000001")
-
-    tenant_id = UUID(x_tenant_id) if x_tenant_id else UUID("0192df78-0000-7000-8000-000000000002")
-    device_id = UUID(x_device_id) if x_device_id else UUID("0192df78-0000-7000-8000-000000000003")
-
-    return AuthUser(id=user_id, tenant_id=tenant_id, device_id=device_id)
-
-
 @router.post(
     "/conversations/{conversation_id}/messages",
     response_model=SendMessageResponse,
@@ -88,7 +43,7 @@ def get_current_user(
 def send_message_endpoint(
     conversation_id: UUID,
     payload: SendMessageRequest,
-    user: Annotated[AuthUser, Depends(get_current_user)],
+    user: Annotated[AuthUser, Depends(current_user)],
 ) -> SendMessageResponse:
     """Send a message using the hardened transactional engine in app/send.py."""
     if payload.kind == "text" and payload.body and len(payload.body) > 8000:
@@ -108,6 +63,7 @@ def send_message_endpoint(
                 conn,
                 conversation_id=conversation_id,
                 sender_id=user.id,
+                tenant_id=user.tenant_id,
                 client_msg_id=payload.client_msg_id,
                 kind=payload.kind,
                 body=payload.body,
@@ -139,7 +95,7 @@ def send_message_endpoint(
     description="Returns all active conversation memberships and sync cursors for the authenticated user.",
 )
 def sync_conversations_endpoint(
-    user: Annotated[AuthUser, Depends(get_current_user)],
+    user: Annotated[AuthUser, Depends(current_user)],
 ) -> SyncConversationsResponse:
     """List active conversations with last_seq, delivered_seq, read_seq, visible_from_seq."""
     with get_conn() as conn:
@@ -151,12 +107,13 @@ def sync_conversations_endpoint(
             JOIN tenant_members tm ON tm.tenant_id = c.tenant_id AND tm.user_id = cm.user_id
             JOIN users u ON u.id = cm.user_id
             WHERE cm.user_id = %s
+              AND c.tenant_id = %s
               AND cm.left_at IS NULL
               AND tm.removed_at IS NULL
               AND u.status = 'active'
             ORDER BY c.created_at DESC
             """,
-            (user.id,),
+            (user.id, user.tenant_id),
         ).fetchall()
 
     items = [
@@ -181,7 +138,7 @@ def sync_conversations_endpoint(
 )
 def get_messages_endpoint(
     conversation_id: UUID,
-    user: Annotated[AuthUser, Depends(get_current_user)],
+    user: Annotated[AuthUser, Depends(current_user)],
     after: Annotated[int, Query(ge=0, description="Retrieve messages strictly after this seq")] = 0,
     limit: Annotated[int, Query(ge=1, le=200, description="Maximum messages to return")] = 50,
 ) -> GetMessagesResponse:
@@ -189,48 +146,27 @@ def get_messages_endpoint(
     user_id = user.id
 
     with get_conn() as conn:
+        authorize(conn, user, "read", conversation_id)
+
         member = conn.execute(
             """
-            SELECT cm.visible_from_seq, cm.left_at, tm.removed_at, u.status
+            SELECT cm.visible_from_seq, cm.left_at
             FROM conversation_members cm
-            JOIN conversations c ON c.id = cm.conversation_id
-            LEFT JOIN tenant_members tm ON tm.tenant_id = c.tenant_id AND tm.user_id = cm.user_id
-            LEFT JOIN users u ON u.id = cm.user_id
             WHERE cm.conversation_id = %s AND cm.user_id = %s
             """,
             (conversation_id, user_id),
         ).fetchone()
 
         if member is None:
-            # Check if conversation exists
-            conv_exists = conn.execute(
-                "SELECT 1 FROM conversations WHERE id = %s", (conversation_id,)
-            ).fetchone()
-            if not conv_exists:
+            # Non-member reading a public or announcement conversation (allowed by authorize())
+            visible_from_seq = 1
+        else:
+            visible_from_seq, left_at = member
+            if left_at is not None:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User has left this conversation (Invariant I4)",
                 )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not a member of this conversation",
-            )
-
-        visible_from_seq, left_at, removed_at, user_status = member
-        if left_at is not None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User has left this conversation (Invariant I4)",
-            )
-        if removed_at is not None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User has been removed from the tenant (Invariant I4)",
-            )
-        if user_status != "active":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User account is not active (Invariant I4)",
-            )
 
         # Invariant I4: never return seq < visible_from_seq
         effective_after = max(after, visible_from_seq - 1)
@@ -289,7 +225,7 @@ def get_messages_endpoint(
 def delete_message_endpoint(
     conversation_id: UUID,
     target_seq: Annotated[int, Path(ge=1, description="Sequence number of message to delete")],
-    user: Annotated[AuthUser, Depends(get_current_user)],
+    user: Annotated[AuthUser, Depends(current_user)],
     x_idempotency_key: Annotated[str | None, Header()] = None,
 ) -> DeleteMessageResponse:
     """Tombstone message deletion endpoint."""
@@ -306,6 +242,7 @@ def delete_message_endpoint(
                 conn,
                 conversation_id=conversation_id,
                 actor_id=user.id,
+                tenant_id=user.tenant_id,
                 target_seq=target_seq,
                 client_msg_id=client_msg_id,
             )

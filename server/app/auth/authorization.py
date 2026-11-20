@@ -32,10 +32,20 @@ def authorize(
     conversation_id: UUID,
     access: ConversationAccess | None,
 ) -> None:
-    """Enforce tenant, account, membership and role permissions."""
+    """Enforce tenant, account, membership and role permissions for a signed-in user."""
+    check_access(user.tenant_id, action, conversation_id, access)
+
+
+def check_access(
+    tenant_id: UUID,
+    action: Action,
+    conversation_id: UUID,
+    access: ConversationAccess | None,
+) -> None:
+    """Same rules as authorize(), for callers that only have the caller's tenant id."""
 
     # 1. Hide conversations that do not exist or belong to another tenant.
-    if access is None or user.tenant_id != access.tenant_id:
+    if access is None or tenant_id != access.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found",
@@ -48,9 +58,11 @@ def authorize(
             detail="Your account or tenant membership is not active",
         )
 
-    # 3. Public and announcement conversations can be read
-    # by any active member of the same tenant.
-    if action == "read" and access.kind in ("public", "announcement"):
+    has_left = access.member_role is not None and access.left_at is not None
+
+    # 3. Public and announcement conversations can be read by any active member of the
+    # same tenant, except someone who has left the conversation (Invariant I4).
+    if action == "read" and access.kind in ("public", "announcement") and not has_left:
         return
 
     # 4. Other actions require active conversation membership.

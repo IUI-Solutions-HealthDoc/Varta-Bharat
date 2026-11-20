@@ -14,6 +14,7 @@ import psycopg
 import pytest
 
 from app.config import settings
+from app.core import db
 from app.send import NotAllowed, enqueue_push, send_message
 from tests.helpers import seed_chat
 
@@ -21,6 +22,9 @@ from tests.helpers import seed_chat
 @pytest.fixture(autouse=True)
 def use_test_db(db_url, monkeypatch):
     monkeypatch.setattr(settings, "database_url", db_url)
+    db.close_pool()
+    yield
+    db.close_pool()
 
 
 def test_fault_mid_transaction_rollback_preserves_gapless_sequence(db_url):
@@ -33,12 +37,14 @@ def test_fault_mid_transaction_rollback_preserves_gapless_sequence(db_url):
         s = seed_chat(conn)
         conv_id = s["conv"]
         alice_id = s["alice"]
+        tenant_id = s["tenant"]
 
         # 1. Normal message 1 succeeds
         m1 = send_message(
             conn,
             conversation_id=conv_id,
             sender_id=alice_id,
+            tenant_id=tenant_id,
             client_msg_id=uuid4(),
             body="Message 1",
         )
@@ -65,6 +71,7 @@ def test_fault_mid_transaction_rollback_preserves_gapless_sequence(db_url):
             conn,
             conversation_id=conv_id,
             sender_id=alice_id,
+            tenant_id=tenant_id,
             client_msg_id=uuid4(),
             body="Message 2 after fault",
         )
@@ -86,6 +93,7 @@ def test_fault_post_commit_valkey_outage_does_not_abort_message(db_url):
         s = seed_chat(conn)
         conv_id = s["conv"]
         alice_id = s["alice"]
+        tenant_id = s["tenant"]
 
         with patch("app.core.valkey.get_valkey") as mock_valkey:
             mock_valkey.side_effect = ConnectionError(
@@ -97,6 +105,7 @@ def test_fault_post_commit_valkey_outage_does_not_abort_message(db_url):
                 conn,
                 conversation_id=conv_id,
                 sender_id=alice_id,
+                tenant_id=tenant_id,
                 client_msg_id=uuid4(),
                 body="Message during Valkey outage",
             )
@@ -119,6 +128,7 @@ def test_fault_post_commit_push_hook_failure_does_not_fail_send(db_url):
         s = seed_chat(conn)
         conv_id = s["conv"]
         alice_id = s["alice"]
+        tenant_id = s["tenant"]
 
         mock_push_module = MagicMock()
         mock_push_module.enqueue_push.side_effect = Exception("Push notification queue timeout")
@@ -132,6 +142,7 @@ def test_fault_post_commit_push_hook_failure_does_not_fail_send(db_url):
                 conn,
                 conversation_id=conv_id,
                 sender_id=alice_id,
+                tenant_id=tenant_id,
                 client_msg_id=uuid4(),
                 body="Message with push failure",
             )
@@ -181,6 +192,7 @@ def test_fault_blocked_user_in_dm_leaves_no_gap(db_url):
                 conn,
                 conversation_id=dm_conv,
                 sender_id=alice,
+                tenant_id=tenant,
                 client_msg_id=uuid4(),
                 body="Should fail due to block",
             )

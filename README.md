@@ -10,7 +10,10 @@ make up        # Postgres 18, Valkey, MinIO
 make migrate   # Alembic upgrade head
 make test      # pytest (creates varta_test automatically)
 make run       # API at http://localhost:8000/health
+make worker    # Celery worker: attachment processing (second terminal)
+make beat      # Celery beat: runs the stuck-upload sweep every minute (third terminal)
 ```
+Uploads stay `pending` until the worker has checked them, so run `make worker` and `make beat` next to `make run` whenever you test attachments. The beat process keeps its schedule in `server/.celerybeat-schedule` (git-ignored).
 **Environment configuration:** The API requires `JWT_SECRET` for signing and validating authentication tokens. It is included in `.env.example` for local development. For production, generate a strong, unique secret and keep it private. Never commit your actual `.env` file or production secrets.
 
 Requires Docker and [uv](https://docs.astral.sh/uv/). Run `uv sync` in `server/` once.

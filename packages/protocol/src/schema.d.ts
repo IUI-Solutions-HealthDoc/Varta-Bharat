@@ -47,7 +47,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Attachment */
+        /**
+         * Create Attachment
+         * @description Create a pending attachment. A retry with the same X-Idempotency-Key returns the same
+         *     attachment (and a fresh upload ticket while it is still pending).
+         */
         post: operations["create_attachment_v1_attachments_post"];
         delete?: never;
         options?: never;
@@ -767,7 +771,9 @@ export interface operations {
     create_attachment_v1_attachments_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-idempotency-key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1002,12 +1008,7 @@ export interface operations {
                 /** @description Maximum messages to return */
                 limit?: number;
             };
-            header?: {
-                authorization?: string | null;
-                "x-user-id"?: string | null;
-                "x-tenant-id"?: string | null;
-                "x-device-id"?: string | null;
-            };
+            header?: never;
             path: {
                 conversation_id: string;
             };
@@ -1038,12 +1039,7 @@ export interface operations {
     send_message_endpoint_v1_conversations__conversation_id__messages_post: {
         parameters: {
             query?: never;
-            header?: {
-                authorization?: string | null;
-                "x-user-id"?: string | null;
-                "x-tenant-id"?: string | null;
-                "x-device-id"?: string | null;
-            };
+            header?: never;
             path: {
                 conversation_id: string;
             };
@@ -1080,10 +1076,6 @@ export interface operations {
             query?: never;
             header?: {
                 "x-idempotency-key"?: string | null;
-                authorization?: string | null;
-                "x-user-id"?: string | null;
-                "x-tenant-id"?: string | null;
-                "x-device-id"?: string | null;
             };
             path: {
                 conversation_id: string;
@@ -1119,12 +1111,7 @@ export interface operations {
             query?: {
                 reason?: string;
             };
-            header?: {
-                authorization?: string | null;
-                "x-user-id"?: string | null;
-                "x-tenant-id"?: string | null;
-                "x-device-id"?: string | null;
-            };
+            header?: never;
             path: {
                 device_id: string;
             };
@@ -1190,12 +1177,7 @@ export interface operations {
     sync_conversations_endpoint_v1_sync_conversations_get: {
         parameters: {
             query?: never;
-            header?: {
-                authorization?: string | null;
-                "x-user-id"?: string | null;
-                "x-tenant-id"?: string | null;
-                "x-device-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -1210,26 +1192,12 @@ export interface operations {
                     "application/json": components["schemas"]["SyncConversationsResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     create_ws_ticket_endpoint_v1_ws_ticket_post: {
         parameters: {
             query?: never;
-            header?: {
-                authorization?: string | null;
-                "x-user-id"?: string | null;
-                "x-tenant-id"?: string | null;
-                "x-device-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -1242,15 +1210,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WsTicketResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

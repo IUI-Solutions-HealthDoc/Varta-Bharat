@@ -14,9 +14,12 @@ import logging
 import unicodedata
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 import psycopg
 from psycopg.pq import TransactionStatus
 
+from app.auth.authorization import check_access
+from app.auth.repository import get_conversation_access
 from app.media.validation import AttachmentRejected, validate_attachment_for_send
 from app.moderation.blocks import blocked_between
 
@@ -95,6 +98,7 @@ def send_message(
     *,
     conversation_id: UUID,
     sender_id: UUID,
+    tenant_id: UUID,
     client_msg_id: UUID,
     kind: str = "text",
     body: str | None = None,
@@ -110,8 +114,8 @@ def send_message(
     - Client kinds must be 'text' or 'media'.
     - Body length max 8000 characters.
     - Unicode NFC normalization.
-    - Active membership & tenant check.
-    - Announcement channel admin check.
+    - Active membership & tenant check via shared app.auth.authorization.authorize.
+    - Announcement channel admin check via shared app.auth.authorization.authorize.
     - User blocks check (sender/recipient in DMs).
     - Attachment readiness, tenant, and uploader check.
     - Gapless monotonic sequence assignment with idempotent duplicate detection.
@@ -147,7 +151,9 @@ def send_message(
             ).fetchone()
             if row is None:
                 raise NotAllowed("conversation not found")
-            seq, conv_kind, tenant_id = row
+            seq, conv_kind, conv_tenant_id = row
+            if tenant_id != conv_tenant_id:
+                raise NotAllowed("conversation not found")
 
             # Step 2: Retry of an earlier send? Return the original; the rollback undoes step 1.
             dup = conn.execute(
@@ -159,21 +165,24 @@ def send_message(
                 raise _Duplicate(dup)
 
             # Step 3: Permission checks
-            # 3a. Active tenant & conversation membership
-            member = conn.execute(
-                "SELECT cm.role FROM conversation_members cm "
-                "JOIN tenant_members tm ON tm.user_id = cm.user_id AND tm.tenant_id = %s "
-                "JOIN users u ON u.id = cm.user_id "
-                "WHERE cm.conversation_id = %s AND cm.user_id = %s "
-                "AND cm.left_at IS NULL AND tm.removed_at IS NULL AND u.status = 'active'",
-                (tenant_id, conversation_id, sender_id),
-            ).fetchone()
-            if member is None:
-                raise NotAllowed("not an active member")
-
-            # 3b. Announcement channel restriction
-            if conv_kind == "announcement" and member[0] != "admin":
-                raise NotAllowed("only admins can post in announcement channels")
+            # 3a & 3b. Active tenant/conversation membership & announcement channel role
+            access = get_conversation_access(
+                conn=conn,
+                user_id=sender_id,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+            )
+            try:
+                check_access(
+                    tenant_id=tenant_id,
+                    action="send",
+                    conversation_id=conversation_id,
+                    access=access,
+                )
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    raise NotAllowed("conversation not found") from exc
+                raise NotAllowed(str(exc.detail)) from exc
 
             # 3c. User block check (for DMs, neither party may be blocked by the other)
             if conv_kind == "dm":
@@ -226,6 +235,7 @@ def send_tombstone(
     *,
     conversation_id: UUID,
     actor_id: UUID,
+    tenant_id: UUID,
     target_seq: int,
     client_msg_id: UUID | None = None,
 ) -> Sent:
@@ -250,16 +260,7 @@ def send_tombstone(
 
     try:
         with conn.transaction():
-            # Step 1: Check if target message exists in this conversation
-            target = conn.execute(
-                "SELECT sender_id FROM messages WHERE conversation_id = %s AND seq = %s",
-                (conversation_id, target_seq),
-            ).fetchone()
-            if target is None:
-                raise NotAllowed("target message not found")
-            orig_sender_id = target[0]
-
-            # Step 2: Lock conversation row by advancing last_seq
+            # Step 1: Lock conversation row by advancing last_seq
             row = conn.execute(
                 "UPDATE conversations SET last_seq = last_seq + 1 "
                 "WHERE id = %s RETURNING last_seq, tenant_id",
@@ -267,9 +268,11 @@ def send_tombstone(
             ).fetchone()
             if row is None:
                 raise NotAllowed("conversation not found")
-            seq, tenant_id = row
+            seq, conv_tenant_id = row
+            if tenant_id != conv_tenant_id:
+                raise NotAllowed("conversation not found")
 
-            # Step 3: Check idempotency for client_msg_id
+            # Step 2: Check idempotency for client_msg_id
             dup = conn.execute(
                 "SELECT seq, id, created_at FROM messages "
                 "WHERE conversation_id = %s AND sender_id = %s AND client_msg_id = %s",
@@ -278,20 +281,38 @@ def send_tombstone(
             if dup is not None:
                 raise _Duplicate(dup)
 
-            # Step 4: Verify permissions (actor must be active member & either orig sender or conv admin)
-            member = conn.execute(
-                "SELECT cm.role FROM conversation_members cm "
-                "JOIN tenant_members tm ON tm.user_id = cm.user_id AND tm.tenant_id = %s "
-                "JOIN users u ON u.id = cm.user_id "
-                "WHERE cm.conversation_id = %s AND cm.user_id = %s "
-                "AND cm.left_at IS NULL AND tm.removed_at IS NULL AND u.status = 'active'",
-                (tenant_id, conversation_id, actor_id),
-            ).fetchone()
-            if member is None:
+            # Step 3: Load access once and verify permissions
+            access = get_conversation_access(
+                conn=conn,
+                user_id=actor_id,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+            )
+            try:
+                check_access(
+                    tenant_id=tenant_id,
+                    action="read",
+                    conversation_id=conversation_id,
+                    access=access,
+                )
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    raise NotAllowed("conversation not found") from exc
+                raise NotAllowed(str(exc.detail)) from exc
+
+            if access is None or access.member_role is None or access.left_at is not None:
                 raise NotAllowed("not an active member")
 
-            role = member[0]
-            if actor_id != orig_sender_id and role != "admin":
+            # Step 4: Check if target message exists in this conversation
+            target = conn.execute(
+                "SELECT sender_id FROM messages WHERE conversation_id = %s AND seq = %s",
+                (conversation_id, target_seq),
+            ).fetchone()
+            if target is None:
+                raise NotAllowed("target message not found")
+            orig_sender_id = target[0]
+
+            if actor_id != orig_sender_id and access.member_role != "admin":
                 raise NotAllowed(
                     "only the original sender or a conversation admin can delete messages"
                 )

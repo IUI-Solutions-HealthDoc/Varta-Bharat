@@ -24,10 +24,9 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 
-from app.config import settings
+from app.auth.dependencies import AuthUser, current_user
 from app.core.db import get_conn
 from app.core.valkey import get_valkey
-from app.messaging.router import AuthUser, get_current_user
 from app.ws.schemas import (
     AckFrame,
     ErrorFrame,
@@ -64,12 +63,14 @@ _socket_loop: dict[WebSocket, asyncio.AbstractEventLoop] = {}
 _pubsub_thread: threading.Thread | None = None
 _pubsub_stop_event = threading.Event()
 _pubsub_ready_event = threading.Event()
+# Process-private channel: publishing to it wakes the subscriber thread at once on shutdown,
+# so the read loop can wait 0.5 s per poll without slowing down a stop.
+_pubsub_wake_channel = f"ws-wake:{uuid4().hex}"
 _thread_init_lock = threading.Lock()
 
 
 def redeem_ws_ticket(ticket: str) -> WsUser | None:
     """Validate and redeem a single-use WebSocket ticket (Plan D-5 / Member 2 contract)."""
-    # 1. Valkey single-use ticket check using shared client
     try:
         client = get_valkey()
         key = f"ws_ticket:{ticket}"
@@ -88,18 +89,6 @@ def redeem_ws_ticket(ticket: str) -> WsUser | None:
             )
     except Exception as exc:  # noqa: BLE001
         log.debug("Valkey ticket lookup failed: %s", exc)
-
-    # 2. Test / Dev ticket format: test:<user_id>:<tenant_id> or test:<user_id>:<tenant_id>:<device_id>
-    # Allowed ONLY when settings.environment == "local"
-    if settings.environment == "local" and ticket.startswith("test:"):
-        parts = ticket.split(":")
-        try:
-            user_id = UUID(parts[1]) if len(parts) > 1 else uuid4()
-            tenant_id = UUID(parts[2]) if len(parts) > 2 else uuid4()
-            device_id = UUID(parts[3]) if len(parts) > 3 else uuid4()
-            return WsUser(id=user_id, tenant_id=tenant_id, device_id=device_id)
-        except (ValueError, IndexError):
-            return None
 
     return None
 
@@ -194,7 +183,7 @@ def publish_valkey_channel(channel: str, payload: dict) -> None:
     description="Issues a single-use ticket stored in Valkey with a 30s TTL for WebSocket authentication.",
 )
 def create_ws_ticket_endpoint(
-    user: Annotated[AuthUser, Depends(get_current_user)],
+    user: Annotated[AuthUser, Depends(current_user)],
 ) -> WsTicketResponse:
     ticket = f"wstk_{secrets.token_hex(16)}"
     key = f"ws_ticket:{ticket}"
@@ -417,7 +406,7 @@ def _check_device_revoke_auth_and_mark(d_id: UUID, u_id: UUID, t_id: UUID, u_dev
 )
 async def revoke_device_endpoint(
     device_id: UUID,
-    user: Annotated[AuthUser, Depends(get_current_user)],
+    user: Annotated[AuthUser, Depends(current_user)],
     reason: str = "Device session revoked by security policy",
 ) -> dict:
     result = await asyncio.to_thread(
@@ -569,11 +558,12 @@ def _valkey_subscriber_worker() -> None:
             client = get_valkey()
             ps = client.pubsub()
             ps.psubscribe("conv:*", "device:*")
-            # Wait for both pattern subscription confirmations
+            ps.subscribe(_pubsub_wake_channel)
+            # Wait for the two pattern subscriptions and the wake channel to be confirmed
             confirmations = 0
-            while confirmations < 2 and not _pubsub_stop_event.is_set():
+            while confirmations < 3 and not _pubsub_stop_event.is_set():
                 m = ps.get_message(timeout=1.0)
-                if m and m.get("type") == "psubscribe":
+                if m and m.get("type") in ("psubscribe", "subscribe"):
                     confirmations = m.get("data", confirmations + 1)
             _pubsub_ready_event.set()
 
@@ -597,6 +587,9 @@ def ensure_valkey_subscriber_thread() -> None:
     """Ensure the background Valkey subscriber daemon thread is running."""
     global _pubsub_thread
     with _thread_init_lock:
+        if _pubsub_stop_event.is_set() and _pubsub_thread is not None and _pubsub_thread.is_alive():
+            _pubsub_thread.join(timeout=2.0)
+            _pubsub_thread = None
         if _pubsub_thread is None or not _pubsub_thread.is_alive():
             _pubsub_stop_event.clear()
             _pubsub_ready_event.clear()
@@ -609,12 +602,26 @@ def ensure_valkey_subscriber_thread() -> None:
             _pubsub_ready_event.wait(timeout=2.0)
 
 
+def stop_valkey_subscriber_thread() -> None:
+    """Stop and join the background Valkey subscriber daemon thread."""
+    global _pubsub_thread
+    with _thread_init_lock:
+        _pubsub_stop_event.set()
+        if _pubsub_thread is not None and _pubsub_thread.is_alive():
+            try:
+                get_valkey().publish(_pubsub_wake_channel, "stop")
+            except Exception as exc:  # noqa: BLE001
+                log.debug("Could not wake Valkey subscriber: %s", exc)
+            _pubsub_thread.join(timeout=2.0)
+        _pubsub_thread = None
+
+
 async def ensure_valkey_subscriber() -> None:
     ensure_valkey_subscriber_thread()
 
 
 async def stop_valkey_subscriber() -> None:
-    _pubsub_stop_event.set()
+    await asyncio.to_thread(stop_valkey_subscriber_thread)
 
 
 @router.websocket("/ws")

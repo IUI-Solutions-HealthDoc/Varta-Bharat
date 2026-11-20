@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.auth.authorization import ConversationAccess, authorize
+from app.auth.authorization import ConversationAccess, authorize, check_access
 from app.auth.dependencies import AuthUser
 
 
@@ -249,3 +249,28 @@ def test_unsupported_action_is_rejected(user, access):
         authorize(user, "delete_everything", uuid4(), access)
 
     assert exc.value.status_code == 400
+
+
+# --------------------------------------------------
+# Left members and tenant-id callers
+# --------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["public", "announcement"])
+def test_member_who_left_cannot_read_public_conversation(user, access, kind):
+    """Invariant I4: no messages from a conversation the user has left, even a public one."""
+    access = replace(access, kind=kind, left_at=datetime.now(UTC))
+
+    with pytest.raises(HTTPException) as exc:
+        authorize(user, "read", uuid4(), access)
+
+    assert exc.value.status_code == 403
+
+
+def test_check_access_uses_the_given_tenant_id(user, access):
+    check_access(user.tenant_id, "send", uuid4(), access)
+
+    with pytest.raises(HTTPException) as exc:
+        check_access(uuid4(), "send", uuid4(), access)
+
+    assert exc.value.status_code == 404
