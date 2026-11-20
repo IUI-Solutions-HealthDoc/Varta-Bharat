@@ -16,22 +16,35 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.config import settings
+from app.core import db
 from app.main import app
-from tests.helpers import seed_chat
+from tests.helpers import auth_headers, seed_chat
 
-client = TestClient(app)
+client: TestClient = None  # type: ignore[assignment]
 
 
 @pytest.fixture(autouse=True)
 def use_test_db(db_url, monkeypatch):
+    global client
     monkeypatch.setattr(settings, "database_url", db_url)
+    db.close_pool()
+    with TestClient(app) as c:
+        client = c
+        yield c
+    db.close_pool()
+
+
+def _get_ws_ticket(chat: dict, who: str = "bob", headers: dict | None = None) -> str:
+    hdrs = headers if headers is not None else auth_headers(chat, who)
+    r = client.post("/v1/ws-ticket", headers=hdrs)
+    assert r.status_code == 200
+    return r.json()["ticket"]
 
 
 def test_rest_post_message_and_idempotent_retry(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
-    alice_id = s["alice"]
-    headers = {"Authorization": f"Bearer {alice_id}"}
+    headers = auth_headers(s, "alice")
     cmid = uuid4()
 
     # 1. Send first message
@@ -66,7 +79,7 @@ def test_rest_post_message_and_idempotent_retry(conn):
 
 def test_rest_sync_conversations_with_active_memberships(conn):
     s = seed_chat(conn)
-    headers = {"Authorization": f"Bearer {s['alice']}"}
+    headers = auth_headers(s, "alice")
 
     resp = client.get("/v1/sync/conversations", headers=headers)
     assert resp.status_code == 200
@@ -84,9 +97,9 @@ def test_rest_sync_conversations_with_active_memberships(conn):
 def test_rest_get_messages_respects_visibility_and_left_members(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
-    headers_alice = {"Authorization": f"Bearer {s['alice']}"}
-    headers_bob = {"Authorization": f"Bearer {s['bob']}"}
-    headers_carol = {"Authorization": f"Bearer {s['carol']}"}
+    headers_alice = auth_headers(s, "alice")
+    headers_bob = auth_headers(s, "bob")
+    headers_carol = auth_headers(s, "carol")
 
     # Alice posts 3 messages (seq 1, 2, 3)
     for i in range(1, 4):
@@ -127,8 +140,8 @@ def test_rest_get_messages_respects_visibility_and_left_members(conn):
 def test_realtime_two_clients_send_and_receive(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
-    bob_ticket = f"test:{s['bob']}:{s['tenant']}"
-    headers_alice = {"Authorization": f"Bearer {s['alice']}"}
+    bob_ticket = _get_ws_ticket(s, "bob")
+    headers_alice = auth_headers(s, "alice")
 
     with client.websocket_connect("/v1/ws") as ws_bob:
         # Handshake: Bob sends hello frame with ticket
@@ -161,9 +174,9 @@ def test_realtime_two_clients_send_and_receive(conn):
 def test_realtime_large_message_receives_hint_and_fetches_via_rest(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
-    bob_ticket = f"test:{s['bob']}:{s['tenant']}"
-    headers_alice = {"Authorization": f"Bearer {s['alice']}"}
-    headers_bob = {"Authorization": f"Bearer {s['bob']}"}
+    headers_alice = auth_headers(s, "alice")
+    headers_bob = auth_headers(s, "bob")
+    bob_ticket = _get_ws_ticket(s, "bob", headers=headers_bob)
 
     with client.websocket_connect("/v1/ws") as ws_bob:
         ws_bob.send_json({"type": "hello", "ticket": bob_ticket})
@@ -198,8 +211,8 @@ def test_realtime_large_message_receives_hint_and_fetches_via_rest(conn):
 def test_offline_client_reconnect_gapless_sync(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
-    headers_alice = {"Authorization": f"Bearer {s['alice']}"}
-    headers_bob = {"Authorization": f"Bearer {s['bob']}"}
+    headers_alice = auth_headers(s, "alice")
+    headers_bob = auth_headers(s, "bob")
 
     # Alice sends 3 messages while Bob is offline
     for i in range(1, 4):
@@ -209,10 +222,12 @@ def test_offline_client_reconnect_gapless_sync(conn):
             headers=headers_alice,
         )
 
+    bob_ticket = _get_ws_ticket(s, "bob", headers=headers_bob)
+
     # Bob reconnects:
     # Step 1: Connect WebSocket
     with client.websocket_connect("/v1/ws") as ws_bob:
-        ws_bob.send_json({"type": "hello", "ticket": f"test:{s['bob']}:{s['tenant']}"})
+        ws_bob.send_json({"type": "hello", "ticket": bob_ticket})
         assert ws_bob.receive_json()["type"] == "welcome"
 
         # Step 2: Sync active conversations to discover latest server sequence
@@ -245,7 +260,7 @@ def test_offline_client_reconnect_gapless_sync(conn):
 def test_ack_frame_advances_cursors_monotonically_and_broadcasts_receipt(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
-    bob_ticket = f"test:{s['bob']}:{s['tenant']}"
+    bob_ticket = _get_ws_ticket(s, "bob")
 
     with client.websocket_connect("/v1/ws") as ws_bob:
         ws_bob.send_json({"type": "hello", "ticket": bob_ticket})
@@ -312,8 +327,8 @@ def test_ack_frame_advances_cursors_monotonically_and_broadcasts_receipt(conn):
 def test_message_deletion_tombstone_permissions_and_invariants(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
-    headers_alice = {"Authorization": f"Bearer {s['alice']}"}
-    headers_bob = {"Authorization": f"Bearer {s['bob']}"}
+    headers_alice = auth_headers(s, "alice")
+    headers_bob = auth_headers(s, "bob")
 
     # 1. Alice sends message 1
     r1 = client.post(
@@ -373,8 +388,8 @@ def test_message_deletion_tombstone_permissions_and_invariants(conn):
 def test_ws_typing_indicator(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
-    ticket_alice = f"test:{s['alice']}:{s['tenant']}"
-    ticket_bob = f"test:{s['bob']}:{s['tenant']}"
+    ticket_alice = _get_ws_ticket(s, "alice")
+    ticket_bob = _get_ws_ticket(s, "bob")
 
     # Bob connects to listen for typing
     with client.websocket_connect("/v1/ws") as ws_bob:
@@ -404,21 +419,16 @@ def test_ws_typing_indicator(conn):
 
 def test_ws_device_revocation(conn):
     s = seed_chat(conn)
-    device_id = uuid4()
-    ticket_alice = f"test:{s['alice']}:{s['tenant']}:{device_id}"
+    headers_alice = auth_headers(s, "alice")
+    ticket_alice = _get_ws_ticket(s, "alice", headers=headers_alice)
 
     with client.websocket_connect("/v1/ws") as ws:
         ws.send_json({"type": "hello", "ticket": ticket_alice})
         welcome = ws.receive_json()
         assert welcome["type"] == "welcome"
-        assert welcome["device_id"] == str(device_id)
+        device_id = welcome["device_id"]
 
         # Trigger device revocation via endpoint with Alice's auth
-        headers_alice = {
-            "Authorization": f"Bearer {s['alice']}",
-            "X-Tenant-Id": str(s["tenant"]),
-            "X-Device-Id": str(device_id),
-        }
         rev_resp = client.post(
             f"/v1/devices/{device_id}/revoke",
             params={"reason": "Device lost or stolen"},
@@ -436,8 +446,7 @@ def test_ws_device_revocation(conn):
 def test_send_message_with_nul_byte_returns_422(conn):
     s = seed_chat(conn)
     conv_id = s["conv"]
-    alice_id = s["alice"]
-    headers = {"Authorization": f"Bearer {alice_id}"}
+    headers = auth_headers(s, "alice")
     payload = {
         "client_msg_id": str(uuid4()),
         "kind": "text",
@@ -450,13 +459,14 @@ def test_send_message_with_nul_byte_returns_422(conn):
 
 def test_valkey_channel_fanout_delivers_to_websocket(conn):
     """Verifies that publishing to Valkey conv:{id} fans out to connected WebSockets across instances."""
+    from datetime import UTC, datetime
     import json
-    from datetime import datetime, UTC
+
     from app.core.valkey import get_valkey
 
     s = seed_chat(conn)
     conv_id = s["conv"]
-    bob_ticket = f"test:{s['bob']}:{s['tenant']}"
+    bob_ticket = _get_ws_ticket(s, "bob")
 
     with client.websocket_connect("/v1/ws") as ws_bob:
         ws_bob.send_json({"type": "hello", "ticket": bob_ticket})
@@ -487,18 +497,18 @@ def test_valkey_channel_fanout_delivers_to_websocket(conn):
 def test_valkey_channel_fanout_receipt_and_typing_and_revocation(conn):
     """Verifies that publishing typing, receipt, and revoked frames to Valkey fans out across instances."""
     import json
+
     from app.core.valkey import get_valkey
 
     s = seed_chat(conn)
     conv_id = s["conv"]
-    bob_device = uuid4()
-    bob_ticket = f"test:{s['bob']}:{s['tenant']}:{bob_device}"
+    bob_ticket = _get_ws_ticket(s, "bob")
 
     with client.websocket_connect("/v1/ws") as ws_bob:
         ws_bob.send_json({"type": "hello", "ticket": bob_ticket})
         welcome = ws_bob.receive_json()
         assert welcome["type"] == "welcome"
-        assert welcome["device_id"] == str(bob_device)
+        bob_device = welcome["device_id"]
 
         valkey_client = get_valkey()
 
@@ -554,3 +564,25 @@ def test_valkey_channel_fanout_receipt_and_typing_and_revocation(conn):
         revoked_frame = ws_bob.receive_json()
         assert revoked_frame["type"] == "revoked"
         assert revoked_frame["reason"] == "Security token rotation"
+
+
+def test_non_member_can_read_public_conversation(conn):
+    """Any active member of the same tenant can read a public conversation (visible_from_seq = 1)."""
+    s = seed_chat(conn, conv_kind="public")
+    conv_id = s["conv"]
+    headers_alice = auth_headers(s, "alice")
+    headers_carol = auth_headers(s, "carol")  # Carol is in tenant, not in conversation_members
+
+    for i in (1, 2):
+        r = client.post(
+            f"/v1/conversations/{conv_id}/messages",
+            json={"client_msg_id": str(uuid4()), "kind": "text", "body": f"public-{i}"},
+            headers=headers_alice,
+        )
+        assert r.status_code == 201
+
+    r_carol = client.get(f"/v1/conversations/{conv_id}/messages?after=0", headers=headers_carol)
+    assert r_carol.status_code == 200
+    msgs = r_carol.json()["messages"]
+    assert [m["seq"] for m in msgs] == [1, 2]
+    assert [m["body"] for m in msgs] == ["public-1", "public-2"]

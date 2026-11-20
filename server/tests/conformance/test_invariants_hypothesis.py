@@ -9,7 +9,7 @@ Verifies:
 - Invariant I6: Append-only tombstone deletion (row never deleted, kind='delete', target_seq set).
 """
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -18,16 +18,23 @@ import psycopg
 import pytest
 
 from app.config import settings
+from app.core import db
 from app.main import app
 from app.send import NotAllowed, send_message, send_tombstone
-from tests.helpers import seed_chat
+from tests.helpers import auth_headers, seed_chat
 
-client = TestClient(app)
+client: TestClient = None  # type: ignore[assignment]
 
 
 @pytest.fixture(autouse=True)
 def use_test_db(db_url, monkeypatch):
+    global client
     monkeypatch.setattr(settings, "database_url", db_url)
+    db.close_pool()
+    with TestClient(app) as c:
+        client = c
+        yield c
+    db.close_pool()
 
 
 # -----------------------------------------------------------------------------
@@ -43,6 +50,7 @@ def test_property_i1_idempotency_retries_produce_single_message(db_url, body, nu
         s = seed_chat(conn)
         conv_id = s["conv"]
         alice_id = s["alice"]
+        tenant_id = s["tenant"]
         client_msg_id = uuid4()
 
         # Initial send
@@ -50,6 +58,7 @@ def test_property_i1_idempotency_retries_produce_single_message(db_url, body, nu
             conn,
             conversation_id=conv_id,
             sender_id=alice_id,
+            tenant_id=tenant_id,
             client_msg_id=client_msg_id,
             body=body,
         )
@@ -62,6 +71,7 @@ def test_property_i1_idempotency_retries_produce_single_message(db_url, body, nu
                 conn,
                 conversation_id=conv_id,
                 sender_id=alice_id,
+                tenant_id=tenant_id,
                 client_msg_id=client_msg_id,
                 body=body,
             )
@@ -96,6 +106,7 @@ def test_property_i2_gapless_sequences_under_interleaved_operations(db_url, acti
         conv_id = s["conv"]
         alice_id = s["alice"]
         carol_id = s["carol"]  # not a member
+        tenant_id = s["tenant"]
 
         last_client_msg_id = None
         expected_seq = 1
@@ -107,6 +118,7 @@ def test_property_i2_gapless_sequences_under_interleaved_operations(db_url, acti
                     conn,
                     conversation_id=conv_id,
                     sender_id=alice_id,
+                    tenant_id=tenant_id,
                     client_msg_id=cmid,
                     body=text_body,
                 )
@@ -121,6 +133,7 @@ def test_property_i2_gapless_sequences_under_interleaved_operations(db_url, acti
                         conn,
                         conversation_id=conv_id,
                         sender_id=alice_id,
+                        tenant_id=tenant_id,
                         client_msg_id=last_client_msg_id,
                         body=text_body,
                     )
@@ -133,6 +146,7 @@ def test_property_i2_gapless_sequences_under_interleaved_operations(db_url, acti
                         conn,
                         conversation_id=conv_id,
                         sender_id=alice_id,
+                        tenant_id=tenant_id,
                         client_msg_id=uuid4(),
                         kind="system",  # client not allowed to send system
                         body=text_body,
@@ -145,6 +159,7 @@ def test_property_i2_gapless_sequences_under_interleaved_operations(db_url, acti
                         conn,
                         conversation_id=conv_id,
                         sender_id=carol_id,  # not a member
+                        tenant_id=tenant_id,
                         client_msg_id=uuid4(),
                         body=text_body,
                     )
@@ -230,7 +245,8 @@ def test_property_i4_visibility_boundary_never_leaks_prior_messages(
         conv_id = s["conv"]
         alice_id = s["alice"]
         bob_id = s["bob"]
-        headers_bob = {"Authorization": f"Bearer {bob_id}"}
+        tenant_id = s["tenant"]
+        headers_bob = auth_headers(s, "bob")
 
         # Alice sends messages 1..num_messages
         for i in range(num_messages):
@@ -238,6 +254,7 @@ def test_property_i4_visibility_boundary_never_leaks_prior_messages(
                 conn,
                 conversation_id=conv_id,
                 sender_id=alice_id,
+                tenant_id=tenant_id,
                 client_msg_id=uuid4(),
                 body=f"msg-{i}",
             )
@@ -320,6 +337,7 @@ def test_property_i6_tombstone_append_only_preserves_original_row(db_url, target
         s = seed_chat(conn)
         conv_id = s["conv"]
         alice_id = s["alice"]
+        tenant_id = s["tenant"]
 
         # Send 4 messages
         for i in range(1, 5):
@@ -327,6 +345,7 @@ def test_property_i6_tombstone_append_only_preserves_original_row(db_url, target
                 conn,
                 conversation_id=conv_id,
                 sender_id=alice_id,
+                tenant_id=tenant_id,
                 client_msg_id=uuid4(),
                 body=f"original-{i}",
             )
@@ -336,6 +355,7 @@ def test_property_i6_tombstone_append_only_preserves_original_row(db_url, target
             conn,
             conversation_id=conv_id,
             actor_id=alice_id,
+            tenant_id=tenant_id,
             target_seq=target_idx,
         )
         assert sent_tomb.seq == 5  # appends at last_seq + 1
@@ -348,9 +368,9 @@ def test_property_i6_tombstone_append_only_preserves_original_row(db_url, target
         ).fetchone()
         assert orig_row == ("text", f"original-{target_idx}", None)
 
-        # Tombstone row exists with kind='delete', target_seq=target_idx, body=None
+        # Tombstone row exists at seq 5 with kind='delete', target_seq=target_idx, body=None
         tomb_row = conn.execute(
-            "SELECT kind, target_seq, body FROM messages WHERE conversation_id = %s AND seq = 5",
+            "SELECT kind, body, target_seq FROM messages WHERE conversation_id = %s AND seq = 5",
             (conv_id,),
         ).fetchone()
-        assert tomb_row == ("delete", target_idx, None)
+        assert tomb_row == ("delete", None, target_idx)
