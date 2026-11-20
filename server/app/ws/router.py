@@ -63,6 +63,9 @@ _socket_loop: dict[WebSocket, asyncio.AbstractEventLoop] = {}
 _pubsub_thread: threading.Thread | None = None
 _pubsub_stop_event = threading.Event()
 _pubsub_ready_event = threading.Event()
+# Process-private channel: publishing to it wakes the subscriber thread at once on shutdown,
+# so the read loop can wait 0.5 s per poll without slowing down a stop.
+_pubsub_wake_channel = f"ws-wake:{uuid4().hex}"
 _thread_init_lock = threading.Lock()
 
 
@@ -555,16 +558,17 @@ def _valkey_subscriber_worker() -> None:
             client = get_valkey()
             ps = client.pubsub()
             ps.psubscribe("conv:*", "device:*")
-            # Wait for both pattern subscription confirmations
+            ps.subscribe(_pubsub_wake_channel)
+            # Wait for the two pattern subscriptions and the wake channel to be confirmed
             confirmations = 0
-            while confirmations < 2 and not _pubsub_stop_event.is_set():
+            while confirmations < 3 and not _pubsub_stop_event.is_set():
                 m = ps.get_message(timeout=1.0)
-                if m and m.get("type") == "psubscribe":
+                if m and m.get("type") in ("psubscribe", "subscribe"):
                     confirmations = m.get("data", confirmations + 1)
             _pubsub_ready_event.set()
 
             while not _pubsub_stop_event.is_set():
-                msg = ps.get_message(ignore_subscribe_messages=True, timeout=0.05)
+                msg = ps.get_message(ignore_subscribe_messages=True, timeout=0.5)
                 if msg is not None and msg.get("type") == "pmessage":
                     _handle_valkey_message_sync(msg.get("channel", ""), msg.get("data"))
         except Exception as exc:  # noqa: BLE001
@@ -604,6 +608,10 @@ def stop_valkey_subscriber_thread() -> None:
     with _thread_init_lock:
         _pubsub_stop_event.set()
         if _pubsub_thread is not None and _pubsub_thread.is_alive():
+            try:
+                get_valkey().publish(_pubsub_wake_channel, "stop")
+            except Exception as exc:  # noqa: BLE001
+                log.debug("Could not wake Valkey subscriber: %s", exc)
             _pubsub_thread.join(timeout=2.0)
         _pubsub_thread = None
 

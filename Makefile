@@ -1,4 +1,4 @@
-.PHONY: up down migrate downgrade test lint run
+.PHONY: up down migrate downgrade test lint run worker beat
 up:
 	docker compose up -d --wait postgres valkey minio
 	docker compose run --rm minio-init
@@ -14,3 +14,7 @@ lint:
 	cd server && uv run ruff check .
 run:
 	cd server && uv run uvicorn app.main:app --reload
+worker:
+	cd server && uv run celery -A app.worker worker -l info
+beat:
+	cd server && uv run celery -A app.worker beat -l info -s .celerybeat-schedule
