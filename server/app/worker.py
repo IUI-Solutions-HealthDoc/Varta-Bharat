@@ -12,7 +12,7 @@ def _broker_url() -> str:
     return urlunsplit(urlsplit(settings.valkey_url)._replace(path="/1"))
 
 
-celery_app = Celery("varta", broker=_broker_url(), include=["app.media.tasks"])
+celery_app = Celery("varta", broker=_broker_url(), include=["app.media.tasks", "app.push.tasks"])
 celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,

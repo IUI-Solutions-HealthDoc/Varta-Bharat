@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     jwt_issuer: str = "varta-api"
     jwt_audience: str = "varta-client"
 
+    # "none" disables push. Real providers need credentials (see app/push/senders.py).
+    push_provider: str = "none"
+    push_delay_s: int = 5  # lets a WebSocket ack arrive before a push is sent
+
     @model_validator(mode="after")
     def _strong_secret_outside_local(self) -> "Settings":
         if self.environment != "local":
